@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>Go-Antigravity</title>
+  <desc>Original ascending geometric A in electric cyan and blue on a deep navy rounded tile.</desc>
+  <defs>
+    <linearGradient id="tile" x1="512" y1="40" x2="512" y2="984" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#142236"/>
+      <stop offset="0.55" stop-color="#101827"/>
+      <stop offset="1" stop-color="#0B1321"/>
+    </linearGradient>
+    <linearGradient id="ascent" x1="376" y1="280" x2="665" y2="742" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9AEAF4"/>
+      <stop offset="0.46" stop-color="#60CBE6"/>
+      <stop offset="1" stop-color="#338DF2"/>
+    </linearGradient>
+  </defs>
+  <rect x="40" y="40" width="944" height="944" rx="224" fill="url(#tile)"/>
+  <rect x="46" y="46" width="932" height="932" rx="218" fill="none" stroke="#2D435B" stroke-opacity="0.60" stroke-width="8"/>
+  <path fill="url(#ascent)" fill-rule="evenodd" d="M512 210 806 730H628L573 632H451L396 730H218ZM512 428 452 536H572Z"/>
+</svg>

@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#101a17">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="在手机上查看和继续 Antigravity 桌面会话。">
+  <title>Antigravity Pocket</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="./styles.css">
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+  <svg class="icon-definitions" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-orbit" viewBox="0 0 24 24"><path d="m7 17 5-12 5 12M9 13h6"/><ellipse cx="12" cy="14" rx="10" ry="4" transform="rotate(-25 12 14)"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 7a7 7 0 0 1 12-1l2 3M4 15l2 3a7 7 0 0 0 12-1"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 20V4m-6 6 6-6 6 6"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M20 11.5a8 8 0 0 1-8 8H5l-3 3v-11a9 9 0 0 1 18 0Z"/><path d="M7 10h8M7 14h5"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M12 5v14m-6-6 6 6 6-6"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="m12 3 10 18H2L12 3Z"/><path d="M12 9v5m0 3h.01"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m5 7 5 5-5 5m8 0h6"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></symbol>
+  </svg>
+  <a class="skip-link" href="#messageInput">跳到消息输入</a>
+  <div class="app-shell">
+    <div id="drawerBackdrop" class="drawer-backdrop" hidden></div>
+    <aside id="sessionDrawer" class="sidebar" aria-label="会话导航" tabindex="-1">
+      <div class="sidebar-top">
+        <a class="brand" href="./" aria-label="Antigravity Pocket 首页"><span class="brand-mark"><svg class="icon"><use href="#i-orbit"/></svg></span><span><strong>Antigravity</strong><span class="brand-subtitle">POCKET <span class="beta">BETA</span></span></span></a>
+        <button id="closeDrawer" class="icon-button mobile-only" type="button" aria-label="关闭会话列表"><svg class="icon"><use href="#i-close"/></svg></button>
+      </div>
+      <button id="newSession" class="new-session" type="button" disabled><svg class="icon"><use href="#i-plus"/></svg><span>新建会话</span></button>
+      <div class="sidebar-section-heading"><h2>最近会话</h2><button id="refreshSessions" class="icon-button" type="button" aria-label="刷新会话列表"><svg class="icon"><use href="#i-refresh"/></svg></button></div>
+      <label class="search-field"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><span class="sr-only">搜索会话</span><input id="sessionSearch" type="search" placeholder="搜索会话" autocomplete="off"></label>
+      <div id="sessionList" class="session-list" aria-label="最近会话"></div>
+      <div class="sidebar-bottom">
+        <div class="desktop-label"><span class="device-icon" aria-hidden="true">⌘</span><div><strong>桌面工作区</strong><span id="backendLabel">等待连接</span></div><span id="sidebarDot" class="status-dot"></span></div>
+        <label class="theme-control" for="themeSelect"><span>外观</span><select id="themeSelect" aria-label="界面外观"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></label>
+        <p>会话在你的桌面运行，随时从这里继续。</p>
+      </div>
+    </aside>
+    <main id="mainContent" class="main-panel">
+      <header class="conversation-header">
+        <button id="openDrawer" class="icon-button mobile-only" type="button" aria-label="打开会话列表" aria-controls="sessionDrawer" aria-expanded="false"><svg class="icon"><use href="#i-menu"/></svg></button>
+        <div class="conversation-heading"><p id="conversationEyebrow">你的随身工作区</p><h1 id="conversationTitle">Antigravity Pocket</h1></div>
+        <div class="header-actions"><span id="connectionStatus" class="connection-status" role="status"><span class="status-dot"></span><span id="connectionLabel">连接中</span></span><button id="refreshConversation" class="icon-button" type="button" aria-label="刷新当前会话"><svg class="icon"><use href="#i-refresh"/></svg></button></div>
+      </header>
+      <section id="notice" class="notice" aria-label="连接和操作提示" hidden><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg><div><p id="noticeText" role="alert"></p><div class="notice-actions"><button id="reconnect" type="button">重新连接</button><a id="authLink" href="/pocket-login" hidden>返回 Pocket 首页验证身份</a></div></div></section>
+      <div id="conversation" class="conversation" tabindex="0" aria-label="会话消息">
+        <div id="emptyState" class="empty-state"><span class="empty-emblem"><svg class="icon"><use href="#i-orbit"/></svg></span><p class="eyebrow">DESKTOP POWER. POCKET SIZE.</p><h2 id="emptyTitle">工作流，随身继续。</h2><p id="emptyDescription">连接桌面后，选择一个会话，或从新的想法开始。</p><button id="emptyAction" class="secondary-button" type="button"><svg class="icon"><use href="#i-refresh"/></svg><span>重新连接桌面</span></button><div class="empty-footnote"><span class="status-dot"></span><span>实时连接你的 Antigravity 桌面</span></div></div>
+        <div id="messages" class="messages" role="list" aria-label="消息列表" hidden></div>
+      </div>
+      <div class="composer-area">
+        <button id="scrollToBottom" class="jump-button" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg><span id="scrollLabel">回到底部</span></button>
+        <div class="composer-status"><div><span id="activityDot" class="status-dot"></span><span id="activityLabel" role="status">正在确认桌面连接…</span></div><button id="cancelGeneration" class="cancel-button" type="button" hidden><svg class="icon"><use href="#i-stop"/></svg><span>停止生成</span></button></div>
+        <form id="composer" class="composer">
+          <label class="sr-only" for="messageInput">发送消息</label><textarea id="messageInput" rows="2" maxlength="100000" placeholder="发送消息，继续你的工作…" aria-describedby="composerHint modelContext" disabled></textarea>
+          <div class="composer-footer"><button id="modelPicker" class="model-picker" type="button" aria-haspopup="dialog" aria-controls="modelSheet" aria-expanded="false" aria-describedby="modelContext"><span id="modelPickerLabel">自动</span><svg class="icon" aria-hidden="true"><use href="#i-chevron"/></svg></button><button id="sendMessage" class="send-button" type="submit" aria-label="发送消息" disabled><svg class="icon"><use href="#i-send"/></svg></button></div>
+        </form>
+        <div class="composer-meta"><span id="modelContext">模型选择在下次发送时生效</span><span id="draftStatus">草稿已保留</span></div>
+        <nav class="mobile-quick-actions mobile-only" aria-label="快捷操作"><button id="quickSessions" type="button" aria-controls="sessionDrawer" aria-expanded="false"><svg class="icon" aria-hidden="true"><use href="#i-chat"/></svg><span>会话</span></button><span id="transportLabel">正在连接</span><button id="quickNew" type="button"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg><span>新建</span></button></nav>
+        <p id="composerHint" class="composer-hint"><span>Enter 换行 · Ctrl / ⌘ + Enter 发送</span><span>Antigravity Pocket</span></p>
+      </div>
+    </main>
+  </div>
+  <div id="sheetBackdrop" class="sheet-backdrop" hidden></div>
+  <section id="modelSheet" class="model-sheet" role="dialog" aria-modal="true" aria-labelledby="modelSheetTitle" aria-describedby="modelSheetHint" tabindex="-1" hidden>
+    <div class="sheet-handle" aria-hidden="true"></div><header class="sheet-header"><div><h2 id="modelSheetTitle">选择模型</h2><p id="modelSheetHint">仅下次发送生效，不单独更改桌面设置</p></div><button id="closeModelSheet" class="icon-button" type="button" aria-label="关闭模型选择"><svg class="icon"><use href="#i-close"/></svg></button></header>
+    <label class="search-field"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><span class="sr-only">搜索模型</span><input id="modelSearch" type="search" placeholder="搜索模型名称或描述" autocomplete="off"></label>
+    <div id="modelOptions" class="model-options" role="group" aria-label="可用模型"></div><p id="modelCatalogStatus" class="catalog-status" role="status"></p>
+  </section>
+  <section id="copySheet" class="model-sheet copy-sheet" role="dialog" aria-modal="true" aria-labelledby="copyTitle" tabindex="-1" hidden><header class="sheet-header"><div><h2 id="copyTitle">手动复制</h2><p>浏览器不允许自动复制，请长按或全选复制。</p></div><button id="closeCopySheet" class="icon-button" type="button" aria-label="关闭复制窗口"><svg class="icon"><use href="#i-close"/></svg></button></header><label class="sr-only" for="copyText">待复制文本</label><textarea id="copyText" readonly></textarea><button id="selectCopyText" class="secondary-button" type="button">全选文本</button></section>
+  <div id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+  <noscript><p class="noscript">请启用 JavaScript 以连接 Antigravity 桌面会话。</p></noscript>
+</body>
+</html>
