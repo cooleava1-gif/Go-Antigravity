@@ -45,20 +45,31 @@ Start-Go-Antigravity.cmd
 
 通过本工具新启动 Antigravity 时会传入代理启动参数和环境变量；已经运行的客户端不会被补注入，需使用原有代理配置或退出后重新启动。Antigravity 原生子进程是否遵守代理由其自身实现决定；系统默认授权浏览器遵守浏览器／系统设置，cloudflared 的公网连接也不在上述显式代理保证内。本地回环接口保持直连。预检成功不能证明真实账户的地区资格或所有客户端流量可用。
 
-## 可选 EXE 入口
+## Windows EXE 发布包
 
-如需带图标的 `Go-Antigravity.exe`，可在 Windows 项目根目录构建：
+源码树中的 `Go-Antigravity.exe` 是带图标的原生入口。要生成可放到 GitHub Releases 的 Windows x64 包，在项目根目录执行：
+
+~~~powershell
+npm --prefix backend ci
+python -m venv .venv-qt
+.\.venv-qt\Scripts\python.exe -m pip install -r desktop-qt/requirements.txt
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows.ps1 -Clean
+~~~
+
+脚本会在 `dist/Go-Antigravity-windows-x64/` 生成 `Go-Antigravity.exe`、后端、桌面文件、锁定的 `node_modules`、Node.js 运行时和可搬运的 Python/PyQt 运行时，并同时生成同名 ZIP。发布包运行时不执行 npm/pip，也不需要用户另外安装 Python 或 Node.js；首次使用时仍需要用户本机已有的 Antigravity 安装，内核补丁会在本地应用到该安装。
+
+这是一个“目录型 EXE 包”，不是把所有运行时压成单个二进制文件。运行时版本、构建提交和发布目录结构写入 `runtime/manifest.json`；Python、Qt、Node 及后端依赖的许可文件随包保留。包内账户、设置、日志和自定义系统提示词默认写入 `%LOCALAPPDATA%\Go-Antigravity`，不会写进发布目录。
+
+仅需构建带图标的入口时，仍可单独运行：
 
 ~~~powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File desktop-qt/build-launcher.ps1
 ~~~
 
-构建使用系统 .NET Framework C# 编译器。这个 EXE 只调用同目录的启动脚本，需保留完整源码目录及许可证，且仍需 Python / Node.js；它不是独立单文件安装包。
-
 ## 开发与发布
 
 界面结构和验证命令见 [FRONTEND.md](FRONTEND.md)，服务、数据、备份与清理边界见 [PORTABLE.md](PORTABLE.md)。后端可在 `backend/` 中执行 `npm ci` 和 `npm run verify`。
 
-本项目没有在线自更新，旧 `runtime/current` 覆盖层不会替换当前源码。Google Antigravity 的官方联网依赖，以及启用手机公网远程时可选的 Cloudflare Tunnel，是独立于旧发布方的服务；仅预览界面可用 `--demo`。本源码树来自核准文件清单，使用独立 Git 历史，不继承原开发仓库的提交、标签和远程配置。源码发布步骤和待确认事项见 [RELEASE.md](RELEASE.md)；不要上传整个安装目录。
+本项目没有在线自更新，旧 `runtime/current` 覆盖层不会替换当前源码。Google Antigravity 的官方联网依赖，以及启用手机公网远程时可选的 Cloudflare Tunnel，是独立于旧发布方的服务；仅预览界面可用 `--demo`。本源码树来自核准文件清单，使用独立 Git 历史，不继承原开发仓库的提交、标签和远程配置。源码发布步骤和 Windows 包发布步骤见 [RELEASE.md](RELEASE.md)；不要上传整个开发目录。
 
 项目许可证见 [LICENSE](LICENSE)。第三方来源、依赖许可和公开分发前尚待核实的内核补丁授权，统一见 [第三方声明](backend/THIRD-PARTY-NOTICES.md)。

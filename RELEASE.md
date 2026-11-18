@@ -1,12 +1,12 @@
 # GitHub 源码发布准备
 
-核对日期：2026-11-18。本说明针对 Windows 源码发布，不包含实际上传、推送或创建 GitHub Release。
+核对日期：2026-11-18。本说明覆盖 Windows 源码快照和目录型 EXE 发布包；不包含本次实际上传、推送或创建 GitHub Release。
 
 ## 当前发布条件
 
 独立版从源码启动本机后端，不加载在线更新、旧覆盖层、旧窗口宿主或旧 Node 运行时。账户/设置/日志与旧版隔离，Qt 拒绝复用不匹配的后端。Node 后端包是私有实现，不发布到 npm。测试使用合成账户与临时目录，不代表真实 Google 账户、实际 Antigravity 网络或 cloudflared 公网端到端已验证。
 
-**当前工作树和 Git 历史暂不应直接公开推送或打包。** 当前内核补丁已改为仓库内独立实现，不加载或打包 agy-tool；历史参考、支持的二进制观察和实际依赖边界见 [第三方声明](backend/THIRD-PARTY-NOTICES.md)。公开分发前仍需核对实际 Antigravity 文件、运行时和其他依赖的许可条件。
+当前内核补丁已改为仓库内独立实现，不加载或打包 agy-tool；历史参考、支持的二进制观察和实际依赖边界见 [第三方声明](backend/THIRD-PARTY-NOTICES.md)。公开分发前仍需核对实际 Antigravity 文件、运行时和其他依赖的许可条件。
 
 现有独立历史的根提交包含早期版本的内核补丁。若要公开分发，应从当前复核通过的源码另建发布目录和新的 Git 历史；只关闭功能或隐藏界面入口，不能清除旧提交中的代码。
 
@@ -32,7 +32,7 @@ git archive --format=zip --output=../Go-Antigravity-source.zip HEAD
 
 归档只含该提交的受跟踪文件，不含未提交修改、未跟踪文件或 .git。不要复制原开发仓库的 .git、fetch 原历史或推送原分支／标签。建立本地独立历史并不代表已上传或获准公开分发。
 
-公开快照只应含审查通过的源码、测试、文档、必要静态资源与许可证。不得包含账户／settings、Token／主密钥、隧道 YAML／证书、日志、运行目录、旧备份、EXE、node_modules、.venv-qt、.go-antigravity-data、.git、.dsh-ops 或本机验收证据。只凭 .gitignore 不能证明未泄露：受跟踪旧文件和历史仍需单独核对。
+公开源码快照只应含审查通过的源码、测试、文档、必要静态资源与许可证。不得包含账户／settings、Token／主密钥、隧道 YAML／证书、日志、运行目录、旧备份、EXE、node_modules、.venv-qt、.go-antigravity-data、.git、.dsh-ops 或本机验收证据。只凭 .gitignore 不能证明未泄露：受跟踪旧文件和历史仍需单独核对。目录型 EXE 包单独由打包脚本生成，不从整个开发目录复制。
 
 ## 干净环境验证
 
@@ -51,7 +51,21 @@ Get-ChildItem desktop-qt/test_*.py | Sort-Object Name | ForEach-Object {
 .\.venv-qt\Scripts\python.exe -B desktop-qt/smoke_test.py --output "$env:TEMP/go-antigravity-qa"
 ~~~
 
-CMD 入口 Start-Go-Antigravity.cmd 会检查／准备环境；--demo 使用合成数据。可选 EXE 入口仍依赖完整源码目录与 Python／Node.js，不是独立安装包。若分发依赖或打包二进制，需另行核对并附带 PyQt6、Qt 和其他实际组件的许可证及必要材料；根 MIT 声明不会替代第三方条件。
+CMD 入口 Start-Go-Antigravity.cmd 会检查／准备源码环境；--demo 使用合成数据。目录型 EXE 包使用包内 Node、Python/PyQt 和生产依赖，运行时不执行 npm/pip。若分发依赖或打包二进制，需附带 PyQt6、Qt、Node 和其他实际组件的许可证及必要材料；根 MIT 声明不会替代第三方条件。
+
+## 构建 Windows 发布包
+
+在干净的 Windows 工作目录准备锁定依赖后执行：
+
+~~~powershell
+npm --prefix backend ci
+python -m venv .venv-qt
+.\.venv-qt\Scripts\python.exe -m pip install -r desktop-qt/requirements.txt
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows.ps1 -Clean
+Get-Content dist/Go-Antigravity-windows-x64/runtime/manifest.json
+~~~
+
+脚本会生成 `dist/Go-Antigravity-windows-x64/` 和同名 ZIP。包内入口是 `Go-Antigravity.exe`，包内运行时目录是 `runtime/node/` 与 `runtime/python/`；账户、设置、日志和自定义系统提示词默认位于 `%LOCALAPPDATA%\Go-Antigravity`。GitHub Actions 的标签发布流程见 `.github/workflows/release-windows.yml`。
 
 ## 无需 TUN 的已验证范围
 

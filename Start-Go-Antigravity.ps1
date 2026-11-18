@@ -38,6 +38,28 @@ function Resolve-EasyAgCommand {
     return $null
 }
 
+function Test-EasyAgPackagedRuntime {
+    param([string]$ProjectRoot)
+    $manifest = Join-Path $ProjectRoot 'runtime/manifest.json'
+    if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) { return $false }
+    foreach ($path in @('runtime/node/node.exe', 'runtime/python/python.exe', 'runtime/python/pythonw.exe')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $ProjectRoot $path) -PathType Leaf)) {
+            throw "Packaged runtime is incomplete: missing $path. Rebuild the release package."
+        }
+    }
+    return $true
+}
+
+function Get-EasyAgPackagedNode {
+    param([string]$ProjectRoot)
+    $candidate = Join-Path $ProjectRoot 'runtime/node/node.exe'
+    $result = Invoke-EasyAgCommand $candidate @('--version')
+    if ($result.ExitCode -ne 0 -or $result.Output.Trim() -notmatch '^v(\d+)\.' -or [int]$Matches[1] -lt 22) {
+        throw 'Bundled Node.js runtime is invalid or older than 22.'
+    }
+    return (Resolve-Path -LiteralPath $candidate).Path
+}
+
 function Get-EasyAgNode {
     $candidate = Resolve-EasyAgCommand 'node.exe'
     if ($candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) {
@@ -64,12 +86,17 @@ function Get-EasyAgNpmCli {
 }
 
 function Initialize-EasyAgBackend {
-    param([string]$ProjectRoot, [string]$Node)
+    param([string]$ProjectRoot, [string]$Node, [switch]$Packaged)
     $backend = Join-Path $ProjectRoot 'backend'
     $manifest = Join-Path $backend 'package.json'
     $lock = Join-Path $backend 'package-lock.json'
     if (-not (Test-Path -LiteralPath $manifest -PathType Leaf) -or -not (Test-Path -LiteralPath $lock -PathType Leaf)) {
         throw 'Missing backend package.json or package-lock.json; restore the complete source checkout.'
+    }
+    if ($Packaged) {
+        $checked = Invoke-EasyAgCommand $Node @('-e', 'const p=require("node:path");const b=process.argv[1],m=require(p.join(b,"package.json")),l=require(p.join(b,"package-lock.json"));for(const [n,v] of Object.entries(m.dependencies||{})){if(l.packages[""].dependencies[n]!==v)process.exit(1);const installed=require(p.join(b,"node_modules",n,"package.json"));if(installed.version!==l.packages["node_modules/"+n].version)process.exit(1);require(p.join(b,"node_modules",n));}', $backend)
+        if ($checked.ExitCode -ne 0) { throw 'Packaged backend dependencies are missing or do not match package-lock.json.' }
+        return
     }
     $fingerprint = (Get-FileHash -Algorithm SHA256 -LiteralPath $manifest).Hash + ':' + (Get-FileHash -Algorithm SHA256 -LiteralPath $lock).Hash
     $stamp = Join-Path $backend 'node_modules/.easyag-bootstrap-lock'
@@ -88,7 +115,13 @@ function Initialize-EasyAgBackend {
 }
 
 function Initialize-EasyAgPython {
-    param([string]$ProjectRoot)
+    param([string]$ProjectRoot, [switch]$Packaged)
+    if ($Packaged) {
+        $python = Join-Path $ProjectRoot 'runtime/python/python.exe'
+        $version = Invoke-EasyAgCommand $python @('-c', 'import sys;sys.exit(0 if sys.version_info >= (3,10) else 1)')
+        if ($version.ExitCode -ne 0) { throw 'Bundled Python runtime is missing or older than 3.10.' }
+        return $python
+    }
     $python = Join-Path $ProjectRoot '.venv-qt/Scripts/python.exe'
     if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
         $py = Resolve-EasyAgCommand 'py.exe'
@@ -132,10 +165,23 @@ function Initialize-EasyAgPython {
 
 function Invoke-EasyAgBootstrap {
     param([string]$ProjectRoot, [string[]]$AppArguments, [switch]$PrepareOnly)
-    $python = Initialize-EasyAgPython $ProjectRoot
+    $packaged = Test-EasyAgPackagedRuntime $ProjectRoot
+    if ($packaged) {
+        $env:GO_ANTIGRAVITY_PACKAGED = '1'
+        $env:PYTHONDONTWRITEBYTECODE = '1'
+        $env:PYTHONUTF8 = '1'
+    } elseif ($env:GO_ANTIGRAVITY_PACKAGED -eq '1') {
+        Remove-Item Env:GO_ANTIGRAVITY_PACKAGED -ErrorAction SilentlyContinue
+    }
+    $python = Initialize-EasyAgPython $ProjectRoot -Packaged:$packaged
     if ($AppArguments -notcontains '--demo') {
-        $env:GO_ANTIGRAVITY_NODE_EXE = Get-EasyAgNode
-        Initialize-EasyAgBackend $ProjectRoot $env:GO_ANTIGRAVITY_NODE_EXE
+        if ($packaged) {
+            $env:GO_ANTIGRAVITY_NODE_EXE = Get-EasyAgPackagedNode $ProjectRoot
+            Initialize-EasyAgBackend $ProjectRoot $env:GO_ANTIGRAVITY_NODE_EXE -Packaged
+        } else {
+            $env:GO_ANTIGRAVITY_NODE_EXE = Get-EasyAgNode
+            Initialize-EasyAgBackend $ProjectRoot $env:GO_ANTIGRAVITY_NODE_EXE
+        }
     }
     if (-not $env:AGY_CLOUDFLARED) {
         $connector = Resolve-EasyAgCommand 'cloudflared.exe'
@@ -149,8 +195,13 @@ function Invoke-EasyAgBootstrap {
         & $python -B $entry @AppArguments
         exit $LASTEXITCODE
     }
-    $pythonw = Join-Path $ProjectRoot '.venv-qt/Scripts/pythonw.exe'
-    if (-not (Test-Path -LiteralPath $pythonw -PathType Leaf)) { throw 'Missing Python windowed launcher in .venv-qt; recreate the environment.' }
+    if ($packaged) {
+        $pythonw = Join-Path $ProjectRoot 'runtime/python/pythonw.exe'
+        if (-not (Test-Path -LiteralPath $pythonw -PathType Leaf)) { throw 'Missing bundled Python windowed launcher; rebuild the release package.' }
+    } else {
+        $pythonw = Join-Path $ProjectRoot '.venv-qt/Scripts/pythonw.exe'
+        if (-not (Test-Path -LiteralPath $pythonw -PathType Leaf)) { throw 'Missing Python windowed launcher in .venv-qt; recreate the environment.' }
+    }
     $launchArgs = @('-B', ('"' + $entry + '"')) + $AppArguments
     Start-Process -FilePath $pythonw -ArgumentList $launchArgs -WorkingDirectory $ProjectRoot
 }

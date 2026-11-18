@@ -49,7 +49,7 @@ PIN 仅保存在当前进程与受保护的本地页面内存中，不写入设�
 
 ## 源码分发与维护
 
-桌面源码运行需 Python 3.10+ 与 Node.js 22+（含 npm），使用根目录 Start-Go-Antigravity.cmd 准备依赖并启动。仅运行后端可在 backend 中执行 npm ci、npm start；测试执行 npm run verify。可选 Go-Antigravity.exe 由 desktop-qt/launcher.cs 和 build-launcher.ps1 构建，只是调用启动脚本的入口，仍需保留完整源码与许可证。仓库不包含运行时和依赖二进制。cloudflared 需另行安装或按其许可证单独提供。
+桌面源码运行需 Python 3.10+ 与 Node.js 22+（含 npm），使用根目录 Start-Go-Antigravity.cmd 准备依赖并启动。仅运行后端可在 backend 中执行 npm ci、npm start；测试执行 npm run verify。目录型 Windows 发布包由 scripts/package-windows.ps1 生成，内含 Go-Antigravity.exe、Node、Python/PyQt 和生产依赖，运行时不执行 npm/pip。只构建 Go-Antigravity.exe 时，它仍只是调用启动脚本的入口，需要完整源码与开发机运行时。cloudflared 需另行安装或按其许可证单独提供。
 
 发布前检查版本库内容，排除 .env、用户设置、账号库、日志、Cloudflare YAML/凭据 JSON、证书、备份与运行时文件。保留 backend/mobile/vendor 与二维码编码器的许可证。不要把本机安装目录打包后直接上传。
 

@@ -6,6 +6,7 @@
 
 # 运行时与构建产物（不入库）
 *.exe
+dist/
 backend/node_modules/
 
 # 历史手工备份（已收进 _attic/，保留在磁盘但不入库）

@@ -1,0 +1,60 @@
+name: Windows package
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+      QT_QPA_PLATFORM: windows
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Prepare locked dependencies
+        shell: pwsh
+        run: |
+          npm --prefix backend ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m venv .venv-qt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\.venv-qt\Scripts\python.exe -m pip install --disable-pip-version-check -r desktop-qt/requirements.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build Windows package
+        shell: pwsh
+        run: .\scripts\package-windows.ps1 -OutputDirectory "$env:GITHUB_WORKSPACE\dist" -Clean
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Go-Antigravity-windows-x64
+          path: dist/Go-Antigravity-windows-x64.zip
+          if-no-files-found: error
+
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$env:GITHUB_REF_NAME" "dist/Go-Antigravity-windows-x64.zip" --generate-notes --title "Go-Antigravity $env:GITHUB_REF_NAME"

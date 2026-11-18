@@ -22,9 +22,21 @@ from backend_client import extract_boot_token, local_request
 BACKEND_PROTOCOL = "go-antigravity/desktop-v1"
 
 
+def packaged_data_directory(environment: QProcessEnvironment) -> Path:
+    base = (environment.value("LOCALAPPDATA").strip()
+            or environment.value("APPDATA").strip())
+    if base:
+        return (Path(base) / "Go-Antigravity").resolve()
+    return (Path.home() / "AppData" / "Local" / "Go-Antigravity").resolve()
+
+
 def backend_data_directory(root: Path, environment: QProcessEnvironment) -> Path:
     configured = environment.value("GO_ANTIGRAVITY_DATA_DIR").strip()
-    return (root / (configured or ".go-antigravity-data")).resolve()
+    if configured:
+        return (root / configured).resolve()
+    if environment.value("GO_ANTIGRAVITY_PACKAGED").strip() == "1":
+        return packaged_data_directory(environment)
+    return (root / ".go-antigravity-data").resolve()
 
 
 def data_directory_id(directory: Path) -> str:
@@ -343,7 +355,12 @@ class BackendRuntime(QObject):
         self._acquire_launch_lock()
 
     def _acquire_launch_lock(self) -> None:
-        self._lock = QLockFile(str(self.root / ".desktop-qt-backend.lock"))
+        try:
+            self._data_directory.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            self._fail("无法创建 Go-Antigravity 数据目录，请检查用户目录权限")
+            return
+        self._lock = QLockFile(str(self._data_directory / ".desktop-qt-backend.lock"))
         self._lock.setStaleLockTime(0)
         self._lock_deadline = time.monotonic() + 20
         self._try_launch_lock()

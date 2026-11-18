@@ -4,7 +4,9 @@
 
 源码分发需 Python 3.10+、Node.js 22+（含 npm）。运行 `Start-Go-Antigravity.cmd`，脚本按锁定清单准备 Python 和后端依赖；首次安装需要联网。从 `PATH` 使用已安装的 `node.exe`，不会选用旧式便携运行时 `easyag-node.exe`。
 
-可选 `Go-Antigravity.exe` 由 `desktop-qt/build-launcher.ps1` 构建，只是启动入口。移动时保留脚本、`desktop-qt/`、`backend/` 与许可证；到另一台机器后重新建立 `.venv-qt`，不要复制旧虚拟环境。依赖和运行时不是单文件打包的一部分。
+GitHub 发布包由 `scripts/package-windows.ps1` 生成，目录包含 `Go-Antigravity.exe`、应用源文件、生产 `node_modules`、`runtime/node/node.exe` 和 `runtime/python/`。发布包不需要用户安装 Python、Node.js 或执行 npm/pip；`runtime/manifest.json` 记录构建提交和运行时版本。这个包仍然是目录型发布，不是单文件 EXE。不要把开发目录中的 `.venv-qt`、`backend/node_modules` 或用户数据直接复制到发布包。
+
+只构建入口时，`desktop-qt/build-launcher.ps1` 仍可生成一个仅调用同目录启动脚本的 EXE。它需要完整源码树和开发机运行时，不能代替发布包。
 
 ## 服务与退出
 
@@ -14,7 +16,7 @@
 
 ## 数据与备份
 
-默认只使用项目根目录的 `.go-antigravity-data/`。如需自定义，设 `GO_ANTIGRAVITY_DATA_DIR` 指向专用目录；相对值从项目根目录解析。不要让不同检出目录同时使用同一个数据目录，也不要指向旧版账户库。独立版使用 Windows 凭据管理器中的 `go-antigravity:accounts-key`。不会读取或迁移旧 `EASYAG_DATA_DIR`、旧应用目录或 `easyag:accounts-key`；首次使用时按需重新设置，不需要删除原数据。
+源码模式默认只使用项目根目录的 `.go-antigravity-data/`。发布包模式默认使用 `%LOCALAPPDATA%\Go-Antigravity`，避免向可能只读的安装目录写入。两种模式都可用 `GO_ANTIGRAVITY_DATA_DIR` 指向专用目录；相对值从项目根目录解析。不要让不同检出目录同时使用同一个数据目录，也不要指向旧版账户库。独立版使用 Windows 凭据管理器中的 `go-antigravity:accounts-key`。不会读取或迁移旧 `EASYAG_DATA_DIR`、旧应用目录或 `easyag:accounts-key`；首次使用时按需重新设置，不需要删除原数据。
 
 账户自动备份只在解析修复、格式迁移等需要覆盖原文件前创建，保留最近 5 份。备份失败会中止恢复写入，不覆盖原文；普通启动与配额刷新不会每次额外创建备份。备份可能含敏感数据，应按真实账户文件保护。
 
@@ -24,7 +26,7 @@
 
 新原子写入临时文件与 Qt 启动目录带所有者信息，只回收可确定属于本项目、已超过安全期限且所有者退出的残留。新近文件、活跃进程文件、其他项目文件及无法确定所有者的旧格式临时文件保留，避免误删。异常断电后不保证立即零残留。旧文件需在停服、确认归属并备份后人工处理。
 
-`__pycache__/`、测试输出和旧 `_attic/` 是开发产物；`.venv-qt/` 和 `backend/node_modules/` 是可重建依赖。Git 已排除相应本机产物，上传前仍应检查 `git status` 和实际提交内容，不要直接压缩整个安装目录。
+`__pycache__/`、测试输出和旧 `_attic/` 是开发产物；`.venv-qt/` 和 `backend/node_modules/` 是开发环境依赖。Git 已排除相应本机产物，上传前仍应检查 `git status` 和实际提交内容。发布包只上传 `dist/Go-Antigravity-windows-x64.zip`，不要直接压缩整个开发目录。
 
 当前桌面不提供账户导出按钮。后端脱敏导出不能恢复账户，完整令牌导出需要明确确认；不要将完整备份、日志或隧道凭据公开分享。
 
