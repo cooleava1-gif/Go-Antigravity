@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-// The launcher runs the backend straight from disk (easyag-node.exe backend/server.js), so
+// The launcher runs the backend straight from disk (node.exe backend/server.js), so
 // editing a module while it is running leaves the process serving stale code. Users cannot
 // tell that apart from a bug in the new code, so watch the source tree and say so in the UI.
 const WATCHED_DIRS = ['core', 'features', 'adapters', 'desktop', 'ui'];

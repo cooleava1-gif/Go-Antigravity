@@ -1,6 +1,7 @@
-// Antigravity kernel patcher — system-prompt tiers and context-window unlock.
+// Go-Antigravity kernel patcher — prompt tiers and context-window unlock.
 //
-// Third-party source attribution and redistribution conditions: see ../THIRD-PARTY-NOTICES.md.
+// This module owns its binary format decoder, patch planner and transaction checks. It does not
+// load a third-party patcher or delegate binary writes to an external runtime.
 //
 // Local safety model: accept AMD64 PE32+ template ranges only within unambiguous,
 // file-backed sections. Validate the current image against its pristine same-build backup;
@@ -12,7 +13,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { execFile } = require('node:child_process');
+const { randomUUID } = require('node:crypto');
 const payloads = require('./kernel-prompt-payloads.json');
+const { CUSTOM_PROMPT_CAPACITY, validateCustomPrompt, customPromptMetadata } = require('./kernel-custom-prompt');
 
 const TEMPLATE_PREFIX = 'google3/third_party/jetski/prompt/template_provider/templates/';
 const SYSTEM_PREFIX = TEMPLATE_PREFIX + 'system_prompts/';
@@ -40,6 +43,10 @@ const BLOAT_SLOTS = Object.freeze([
 ]);
 
 const CORE_SLOTS = Object.freeze(['system_prompts/guidelines.tmpl', 'system_prompts/function_call.tmpl', 'system_prompts/communication_style.tmpl']);
+
+const CUSTOM_HEADER_BYTES = 128;
+const CUSTOM_HEADER_PREFIX = 'GO-ANTIGRAVITY:CUSTOM:1;BYTES=';
+const CUSTOM_HEADER_HASH = ';SHA256=';
 
 // Go template comment used to pad a shortened slot back to its original byte length. Wrapping the
 // filler in `{{- /* ... */ -}}` keeps it out of the rendered prompt AND out of the output, so the
@@ -93,7 +100,8 @@ const PROMPT_TIERS = Object.freeze({
   '1': { key: '1', label: '旧 1 档 · 兼容识别', short: '旧 1 档', visible: false, legacy: true, payloadVersion: 1, detail: '旧版清空两个辅助模板；仅识别和还原，请显式选择新版档位' },
   '2': { key: '2', label: '旧 2 档 · 兼容识别', short: '旧 2 档', visible: false, legacy: true, payloadVersion: 1, detail: '旧版清空七个辅助模板；仅识别和还原，请显式选择新版档位' },
   '3': { key: '3', label: '精简', short: '精简', visible: true, legacy: false, payloadVersion: 2, detail: '保留全部辅助模板，以较短文本重写三个核心槽；保留必要证据、工具与失败回读规则' },
-  '4': { key: '4', label: '均衡（推荐）', short: '均衡', visible: true, legacy: false, payloadVersion: 2, detail: '保留全部辅助模板，重写三个核心槽，较详细说明证据、授权任务和结果验证；降低误报风险而非保证正确' }
+  '4': { key: '4', label: '均衡（兼容识别）', short: '均衡', visible: false, legacy: false, payloadVersion: 2, detail: '保留全部辅助模板，重写三个核心槽，保留旧版均衡载荷以便识别和还原' },
+  custom: { key: 'custom', label: '自定义上传', short: '自定义', visible: true, legacy: false, payloadVersion: 3, detail: '只替换三个核心指令槽；身份、工具声明、辅助模板和启动校验旁路保持原样' }
 });
 
 const CONTEXT_MODES = Object.freeze({
@@ -108,6 +116,7 @@ function normalizePromptTier(value) {
   if (['0', 'restore', 'stock', 'official', 'reset', 'default'].includes(key)) return 'stock';
   if (key === 'balanced') return '4';
   if (key === 'compact') return '3';
+  if (key === 'custom' || key === 'replace') return 'custom';
   return Object.hasOwn(PROMPT_TIERS, key) ? key : null;
 }
 
@@ -118,6 +127,72 @@ function normalizeContextMode(value) {
   if (key === '512k' || key === '512') return '512k';
   if (key === '900k' || key === '1m' || key === '900' || key === 'max') return '900k';
   return null;
+}
+
+function encodeCustomHeader(metadata) {
+  const header = `${CUSTOM_HEADER_PREFIX}${String(metadata.bytes).padStart(10, '0')}${CUSTOM_HEADER_HASH}${metadata.hash};`;
+  const encoded = Buffer.from(header, 'ascii');
+  if (encoded.length > CUSTOM_HEADER_BYTES) throw new Error('自定义提示词头超出固定槽位');
+  return Buffer.concat([encoded, Buffer.alloc(CUSTOM_HEADER_BYTES - encoded.length, 0x20)]);
+}
+
+function decodeCustomHeader(text) {
+  const bytes = Buffer.from(text.slice(0, CUSTOM_HEADER_BYTES), 'utf8');
+  if (bytes.length !== CUSTOM_HEADER_BYTES) return null;
+  const header = bytes.toString('ascii');
+  const match = /^GO-ANTIGRAVITY:CUSTOM:1;BYTES=(\d{10});SHA256=([0-9a-f]{64});/.exec(header);
+  if (!match) return null;
+  const declaredBytes = Number(match[1]);
+  if (!Number.isSafeInteger(declaredBytes) || declaredBytes <= 0 || declaredBytes > CUSTOM_PROMPT_CAPACITY) return null;
+  return { bytes: declaredBytes, hash: match[2] };
+}
+
+function splitUtf8Prefix(bytes, limit) {
+  let end = Math.min(limit, bytes.length);
+  while (end > 0 && end < bytes.length && (bytes[end] & 0xc0) === 0x80) end--;
+  return end;
+}
+
+function writeCustomPrompt(buffer, slots, text) {
+  const metadata = customPromptMetadata(text);
+  const header = encodeCustomHeader(metadata);
+  const encoded = Buffer.from(text, 'utf8');
+  let cursor = 0;
+  for (const [index, name] of CORE_SLOTS.entries()) {
+    const slot = slots.get(name);
+    const prefix = index === 0 ? header : Buffer.alloc(0);
+    const capacity = slot.dataLength - prefix.length;
+    if (capacity < 0) throw new Error(`模板 ${name} 没有足够空间保存自定义提示词头`);
+    const remaining = encoded.length - cursor;
+    const take = splitUtf8Prefix(encoded.subarray(cursor), Math.min(capacity, remaining));
+    if (remaining > 0 && take === 0) throw new Error(`模板 ${name} 无法在 UTF-8 字符边界处分段`);
+    const segment = Buffer.concat([prefix, encoded.subarray(cursor, cursor + take)]).toString('utf8');
+    writePaddedTemplate(buffer, slot, segment);
+    cursor += take;
+  }
+  if (cursor !== encoded.length) throw new Error('自定义提示词超过三个核心模板的总容量');
+  return metadata;
+}
+
+function readCustomPrompt(slots, buffer) {
+  const firstSlot = slots.get(CORE_SLOTS[0]);
+  if (!firstSlot) return null;
+  const parts = CORE_SLOTS.map(name => {
+    const slot = slots.get(name);
+    if (!slot) return null;
+    return activeTemplateText(buffer.toString('utf8', slot.dataOffset, slot.dataOffset + slot.dataLength));
+  });
+  if (parts.some(part => part === null)) return null;
+  const header = decodeCustomHeader(parts[0]);
+  if (!header) return null;
+  const text = parts[0].slice(CUSTOM_HEADER_BYTES) + parts.slice(1).join('');
+  try {
+    const metadata = customPromptMetadata(text);
+    if (metadata.bytes !== header.bytes || metadata.hash !== header.hash) return null;
+    return { text, ...metadata };
+  } catch {
+    return null;
+  }
 }
 
 function localAppDataDir() {
@@ -342,6 +417,10 @@ function detectPromptState(slots, buffer) {
   const stripped = name => slots.get(name).stripped === true;
   const allStripped = names => names.every(name => stripped(name) && matchesPaddedTemplate(buffer, slots.get(name), ''));
   const noStripped = names => names.every(name => !stripped(name));
+  const custom = readCustomPrompt(slots, buffer);
+  if (custom && noStripped(BLOAT_SLOTS)) {
+    return { tier: 'custom', payloadVersion: 3, legacy: false, customText: custom.text, customHash: custom.hash, customBytes: custom.bytes };
+  }
   for (const version of [payloads.version, 1]) {
     for (const tier of ['3', '4']) {
       const helpersMatch = version === 1 ? allStripped(BLOAT_SLOTS) : noStripped(BLOAT_SLOTS);
@@ -354,7 +433,7 @@ function detectPromptState(slots, buffer) {
   const rewritten = CORE_SLOTS.some(name => {
     const slot = slots.get(name);
     const text = buffer.toString('utf8', slot.dataOffset, slot.dataOffset + slot.dataLength);
-    return text.includes(PAD_OPEN) || text.startsWith('EasyAG ') || [1, payloads.version].some(version =>
+    return text.includes(PAD_OPEN) || text.startsWith('GO-ANTIGRAVITY:CUSTOM:') || text.startsWith('EasyAG ') || [1, payloads.version].some(version =>
       ['3', '4'].some(tier => text.startsWith(payloadFor(tier, name, version).slice(0, 40))));
   });
   if (rewritten) return state('unknown');
@@ -385,7 +464,7 @@ function findApplyEditsTail(buffer) {
 // Applies a tier to `buffer`, always re-seeding every slot from `backup` first. This is what makes
 // tier switching idempotent: no matter what the file looked like before, the result depends only
 // on (backup, tier).
-function applyPromptTier(buffer, backup, tier, slots, payloadVersion = payloads.version) {
+function applyPromptTier(buffer, backup, tier, slots, payloadVersion = payloads.version, customText) {
   if (!Object.hasOwn(PROMPT_TIERS, tier)) throw new Error('未知的提示词档位：' + tier);
   const backupSlots = parseEmbedTemplates(backup);
   if ([IDENTITY_SLOT, ...CORE_SLOTS, ...BLOAT_SLOTS].some(name => !backupSlots.has(name))) {
@@ -401,6 +480,7 @@ function applyPromptTier(buffer, backup, tier, slots, payloadVersion = payloads.
     throw new Error('未找到唯一的原始 applyEdits 校验签名，当前内核版本不受支持');
   }
   const rewritten = tier === '3' || tier === '4';
+  if (tier === 'custom') validateCustomPrompt(customText);
   // Validate every replacement before mutating even the in-memory output buffer.
   if (rewritten) {
     for (const name of CORE_SLOTS) {
@@ -422,16 +502,28 @@ function applyPromptTier(buffer, backup, tier, slots, payloadVersion = payloads.
       strippedBytes += slot.dataLength;
     }
     if (rewritten) for (const name of CORE_SLOTS) writePaddedTemplate(buffer, backupSlots.get(name), payloadFor(tier, name, payloadVersion));
+    if (tier === 'custom') writeCustomPrompt(buffer, backupSlots, customText);
   }
   if (applyEdits) (tier === 'stock' ? applyEdits.stock : applyEdits.bypass).copy(buffer, applyEdits.offset);
   if (!buffer.subarray(identity.dataOffset, identity.dataOffset + identity.dataLength).equals(originalIdentity)) {
     throw new Error('严重错误：identity.tmpl 身份校验区被改动，已中止写入');
   }
-  const coreBytes = rewritten ? CORE_SLOTS.reduce((sum, name) => sum + Buffer.byteLength(payloadFor(tier, name, payloadVersion), 'utf8'), 0) : null;
+  const coreBytes = rewritten ? CORE_SLOTS.reduce((sum, name) => sum + Buffer.byteLength(payloadFor(tier, name, payloadVersion), 'utf8'), 0)
+    : tier === 'custom' ? CUSTOM_PROMPT_CAPACITY : null;
   const message = tier === 'stock' ? '已从同版本备份还原全部官方模板及提示词校验字节'
-    : '已应用 [' + PROMPT_TIERS[tier].label + ']：' + (rewritten ? '重写三个核心模板，载荷 ' + coreBytes + ' 字节' : '旧版兼容模板')
+    : '已应用 [' + PROMPT_TIERS[tier].label + ']：' + (rewritten ? '重写三个核心模板，载荷 ' + coreBytes + ' 字节' : tier === 'custom' ? '写入三个核心模板，用户文本 ' + CUSTOM_PROMPT_CAPACITY + ' 字节容量' : '旧版兼容模板')
       + '；' + (strippedBytes ? '清空辅助模板 ' + strippedBytes + ' 字节' : '保留全部辅助模板');
-  return { message, strippedBytes, coreBytes, payloadVersion: rewritten ? payloadVersion : tier === 'stock' ? null : 1, slotCount: backupSlots.size };
+  const custom = tier === 'custom' ? customPromptMetadata(customText) : null;
+  return {
+    message,
+    strippedBytes,
+    coreBytes,
+    payloadVersion: tier === 'custom' ? 3 : rewritten ? payloadVersion : tier === 'stock' ? null : 1,
+    customText: custom?.text,
+    customHash: custom?.hash,
+    customBytes: custom?.bytes,
+    slotCount: backupSlots.size
+  };
 }
 
 // ============================================================================
@@ -489,7 +581,6 @@ function applyContextPatch(buffer, backup, mode) {
 // contextWindow ownership; restoration never overwrites unrelated, later user edits.
 const CONTEXT_STATE_SUFFIX = '.easyag-context.json';
 let kernelTransactionActive = false;
-const { randomUUID } = require('node:crypto');
 
 function readOptional(file) {
   try { return fs.readFileSync(file); }
@@ -805,6 +896,8 @@ function inspectTarget(target) {
     promptTier: 'stock',
     promptPayloadVersion: null,
     promptLegacy: false,
+      customHash: null,
+      customBytes: 0,
     contextMode: 'stock',
     slots: [],
     gates: [],
@@ -828,6 +921,8 @@ function inspectTarget(target) {
       promptTier: prompt.tier,
       promptPayloadVersion: prompt.payloadVersion,
       promptLegacy: prompt.legacy,
+      customHash: prompt.customHash || null,
+      customBytes: prompt.customBytes || 0,
       contextMode: detectContextMode(buffer),
       slots: list,
       activeSlotBytes: list.reduce((sum, slot) => sum + slot.activeBytes, 0),
@@ -898,7 +993,7 @@ function verifyBackupMatches(current, backup) {
   // Reconstruct only an exact known patch plan, then compare every byte. Layout alone cannot
   // establish build identity; no unrelated code, auxiliary text or PE metadata may differ.
   const expected = Buffer.from(backup);
-  try { applyPromptTier(expected, backup, prompt.tier, backupSlots, prompt.payloadVersion || payloads.version); }
+  try { applyPromptTier(expected, backup, prompt.tier, backupSlots, prompt.payloadVersion || payloads.version, prompt.customText); }
   catch (error) { return error.message; }
   for (const gate of currentGates) {
     const signature = CONTEXT_SIGNATURES.find(item => item.id === gate.id);
@@ -916,7 +1011,7 @@ async function applyKernelPatch(request = {}, options = {}) {
   finally { kernelTransactionActive = false; }
 }
 
-async function applyKernelPatchTransaction({ promptTier, contextMode } = {}, options = {}) {
+async function applyKernelPatchTransaction({ promptTier, contextMode, promptText } = {}, options = {}) {
   const targets = options.targets || resolveTargets(options.env);
   const homeDir = options.homeDir || os.homedir();
   const logs = [], errors = [], entries = [], plans = [], successLogs = [];
@@ -925,6 +1020,7 @@ async function applyKernelPatchTransaction({ promptTier, contextMode } = {}, opt
   if (promptTier !== undefined && promptTier !== null && tier === null) throw new Error('未知的提示词档位：' + promptTier);
   if (contextMode !== undefined && contextMode !== null && mode === null) throw new Error('未知的上下文档位：' + contextMode);
   if (tier === '1' || tier === '2') throw new Error('旧提示词档位仅兼容识别和还原，请选择官方原版、均衡或精简');
+  if (tier === 'custom') validateCustomPrompt(promptText);
   if (tier === null && mode === null) throw new Error('没有需要应用的内核变更');
 
   // Validate every target before creating any backup or modifying any live file.
@@ -937,7 +1033,11 @@ async function applyKernelPatchTransaction({ promptTier, contextMode } = {}, opt
       const mismatch = verifyBackupMatches(current, backup);
       if (mismatch) throw new Error(mismatch + '；请恢复同版本官方原始内核和备份后重试');
       const next = Buffer.from(current), targetLogs = ['▶ ' + target.label];
-      if (tier !== null) targetLogs.push('[提示词] ' + applyPromptTier(next, backup, tier).message);
+      let promptResult = null;
+      if (tier !== null) {
+        promptResult = applyPromptTier(next, backup, tier, undefined, payloads.version, promptText);
+        targetLogs.push('[提示词] ' + promptResult.message);
+      }
       if (mode !== null) {
         const gates = applyContextPatch(next, backup, mode);
         targetLogs.push('[上下文] ' + (gates.length ? '已改写 ' + gates.length + ' 处封顶判断 → ' + CONTEXT_MODES[mode].label : '未找到可改写的封顶签名'));
@@ -945,7 +1045,7 @@ async function applyKernelPatchTransaction({ promptTier, contextMode } = {}, opt
       if (saved === null) entries.push({ file: target.backupPath, before: null, after: backup });
       const binary = { file: target.path, before: current, after: next, binary: true };
       if (!next.equals(current)) entries.push(binary);
-      plans.push({ targetLogs, changed: !next.equals(current) });
+      plans.push({ targetLogs, changed: !next.equals(current), promptResult });
     } catch (error) { errors.push(target.path + '：' + error.message); }
   }
   if (plans.length === 0 && errors.length === 0) errors.push('未找到可应用的 Antigravity 内核');
@@ -975,7 +1075,16 @@ async function applyKernelPatchTransaction({ promptTier, contextMode } = {}, opt
     rollbackEntries(entries, errors);
     if (!errors.some(message => message.startsWith('回滚 '))) logs.push('[回滚] 已恢复本轮所有已变更目标');
   } finally { cleanupEntries(entries, errors); }
-  return { ok: errors.length === 0, logs, errors, promptTier: tier, contextMode: mode };
+  const promptResult = plans.map(plan => plan.promptResult).find(Boolean);
+  return {
+    ok: errors.length === 0,
+    logs,
+    errors,
+    promptTier: tier,
+    contextMode: mode,
+    customHash: promptResult?.customHash || null,
+    customBytes: promptResult?.customBytes || 0
+  };
 }
 
 async function killLanguageServers() {
@@ -991,12 +1100,15 @@ module.exports = {
   BLOAT_SLOTS,
   CORE_SLOTS,
   CONTEXT_SIGNATURES,
+  CUSTOM_PROMPT_CAPACITY,
   PROMPT_TIERS,
   CONTEXT_MODES,
   SLOT_CAPACITY,
   payloads,
   normalizePromptTier,
   normalizeContextMode,
+  validateCustomPrompt,
+  customPromptMetadata,
   resolveTargets,
   parseEmbedTemplates,
   computeActiveBytes,

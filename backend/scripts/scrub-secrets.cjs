@@ -5,15 +5,14 @@
 //   node scripts/scrub-secrets.cjs                      # 扫描默认数据目录
 //   node scripts/scrub-secrets.cjs D:\path\to\data --write
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { redactSecrets, containsSecret } = require('../core/redact');
+const { resolveDataDirectory } = require('../core/runtime-data');
 
 const args = process.argv.slice(2);
 const write = args.includes('--write');
 const target = args.find(arg => !arg.startsWith('--'))
-  || process.env.EASYAG_DATA_DIR
-  || path.join(process.env.LOCALAPPDATA || os.homedir(), 'com.easyag.launcher.tauri');
+  || resolveDataDirectory(path.resolve(__dirname, '..'), process.env);
 
 if (!fs.existsSync(target)) {
   console.error(`数据目录不存在：${target}`);

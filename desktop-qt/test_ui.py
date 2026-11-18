@@ -5,6 +5,7 @@ from copy import deepcopy
 import json
 import os
 import sys
+import tempfile
 import unittest
 
 # On Windows the offscreen Qt plugin does not automatically load system fonts.
@@ -403,20 +404,86 @@ class FrontendRegressionTests(unittest.TestCase):
                 self.assertFalse(w.clear_tunnel_token_button.isEnabled())
                 self.assertIn("暂不可用", w.tunnel_token_status.text())
 
+    def test_visible_prompt_tiers_context_labels_and_custom_metadata(self):
+        w = self.window
+        self.assertEqual([key for _, key in w.tier._items], ["stock", "3", "custom"])
+        self.assertEqual([text for text, _ in w.tier._items], ["官方原版", "精简·防编造", "自定义上传"])
+        self.assertEqual([key for _, key in w.context._items], ["stock", "512k", "900k"])
+        self.assertIn("1M", w.context._items[2][0])
+        self.assertIn("1M", w.CTX_HINTS["900k"])
+        self.assertIn("983,040", w.CTX_HINTS["900k"])
+        self.assertIn("512,000", w.CTX_HINTS["512k"])
+        self.assertTrue(hasattr(w, "custom_prompt_button"))
+        self.assertTrue(hasattr(w, "custom_prompt_status_label"))
+        self.assertEqual(w._custom_capacity, 3960)
+
     def test_three_prompt_choices_preserve_legacy_read_without_silent_selection(self):
         w = self.window
-        self.assertEqual([key for _, key in w.tier._items], ["stock", "4", "3"])
-        state = deepcopy(demo_snapshot())
-        state["kernel"]["desired"]["promptTier"] = "2"
-        w.render_status(state)
-        self.assertIsNone(w.tier.currentData())
-        self.assertIn("旧 2 档", w.tier_hint_label.text())
         w.confirm = lambda *args: True
+        for legacy in ("1", "2", "4"):
+            with self.subTest(legacy=legacy):
+                before = len(self.client.calls)
+                state = deepcopy(demo_snapshot())
+                state["kernel"]["desired"]["promptTier"] = legacy
+                w.render_status(state)
+                self.assertIsNone(w.tier.currentData())
+                self.assertIn(f"旧 {legacy} 档", w.tier_hint_label.text())
+                w.apply_kernel()
+                self.assertEqual(len(self.client.calls), before, "legacy tier must not be silently applied")
+        state = deepcopy(demo_snapshot())
+        state["kernel"]["desired"]["promptTier"] = "3"
+        w.render_status(state)
+        self.assertEqual(w.tier.currentData(), "3")
         w.apply_kernel()
-        self.assertFalse(self.client.calls)
-        w.tier.setCurrentIndex(w.tier.findData("4"))
+        payload = self.client.calls[-1][2]
+        self.assertEqual(payload["promptTier"], "3")
+        self.assertNotIn("promptText", payload)
+
+    def test_custom_apply_sends_prompt_text(self):
+        w = self.window
+        w.confirm = lambda *args: True
+        text = "本地自定义核心指令：先读取再断言。"
+        ok, message = w.validate_custom_prompt(text)
+        self.assertTrue(ok, message)
+        w._custom_prompt_draft = text
+        w.tier.setCurrentIndex(w.tier.findData("custom"))
         w.apply_kernel()
-        self.assertEqual(self.client.calls[-1][2]["promptTier"], "4")
+        payload = self.client.calls[-1][2]
+        self.assertEqual(payload["promptTier"], "custom")
+        self.assertEqual(payload["promptText"], text)
+
+    def test_restore_clears_custom_prompt(self):
+        w = self.window
+        w.confirm = lambda *args: True
+        w.apply_kernel(restore=True)
+        self.assertEqual(
+            self.client.calls[-1][2],
+            {"promptTier": "stock", "contextMode": "stock", "clearCustomPrompt": True},
+        )
+
+    def test_custom_validation_and_file_reader_follow_contract(self):
+        w = self.window
+        for bad in ["", "   ", "a\x00b", "{{ go }}", "x }} y", "z" * (w._custom_capacity + 1)]:
+            with self.subTest(bad=bad[:12]):
+                ok, _msg = w.validate_custom_prompt(bad)
+                self.assertFalse(ok)
+        ok, _msg = w.validate_custom_prompt(b"\xef\xbb\xbf" + "有效文本".encode("utf-8"))
+        self.assertTrue(ok, "UTF-8-BOM bytes are accepted")
+        with tempfile.TemporaryDirectory() as tmp:
+            good = os.path.join(tmp, "prompt.md")
+            with open(good, "wb") as handle:
+                handle.write(b"\xef\xbb\xbf" + "带 BOM 的文本".encode("utf-8"))
+            self.assertEqual(w._read_custom_prompt_file(good), "带 BOM 的文本")
+            bad_ext = os.path.join(tmp, "prompt.exe")
+            with open(bad_ext, "wb") as handle:
+                handle.write(b"text")
+            with self.assertRaises(ValueError):
+                w._read_custom_prompt_file(bad_ext)
+            bad_utf8 = os.path.join(tmp, "bad.txt")
+            with open(bad_utf8, "wb") as handle:
+                handle.write(b"\xff\xfe\x00not-utf8")
+            with self.assertRaises(ValueError):
+                w._read_custom_prompt_file(bad_utf8)
 
     def test_fixed_token_form_is_reachable_in_both_themes_at_minimum_size(self):
         w = self.window

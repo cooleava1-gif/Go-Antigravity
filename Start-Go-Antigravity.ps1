@@ -39,16 +39,14 @@ function Resolve-EasyAgCommand {
 }
 
 function Get-EasyAgNode {
-    param([string]$ProjectRoot)
-    $candidates = @((Join-Path $ProjectRoot 'easyag-node.exe'), (Resolve-EasyAgCommand 'node.exe'))
-    foreach ($candidate in $candidates) {
-        if (-not $candidate -or -not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
-        try { $result = Invoke-EasyAgCommand $candidate @('--version') } catch { continue }
-        if ($result.ExitCode -eq 0 -and $result.Output.Trim() -match '^v(\d+)\.' -and [int]$Matches[1] -ge 22) {
+    $candidate = Resolve-EasyAgCommand 'node.exe'
+    if ($candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+        try { $result = Invoke-EasyAgCommand $candidate @('--version') } catch { $result = $null }
+        if ($result -and $result.ExitCode -eq 0 -and $result.Output.Trim() -match '^v(\d+)\.' -and [int]$Matches[1] -ge 22) {
             return (Resolve-Path -LiteralPath $candidate).Path
         }
     }
-    throw 'Node.js 22+ is required. Install Node.js with npm, or supply easyag-node.exe in the project.'
+    throw 'Node.js 22+ is required. Install Node.js with npm and add node.exe to PATH.'
 }
 
 function Get-EasyAgNpmCli {
@@ -136,8 +134,8 @@ function Invoke-EasyAgBootstrap {
     param([string]$ProjectRoot, [string[]]$AppArguments, [switch]$PrepareOnly)
     $python = Initialize-EasyAgPython $ProjectRoot
     if ($AppArguments -notcontains '--demo') {
-        $env:EASYAG_NODE_EXE = Get-EasyAgNode $ProjectRoot
-        Initialize-EasyAgBackend $ProjectRoot $env:EASYAG_NODE_EXE
+        $env:GO_ANTIGRAVITY_NODE_EXE = Get-EasyAgNode
+        Initialize-EasyAgBackend $ProjectRoot $env:GO_ANTIGRAVITY_NODE_EXE
     }
     if (-not $env:AGY_CLOUDFLARED) {
         $connector = Resolve-EasyAgCommand 'cloudflared.exe'

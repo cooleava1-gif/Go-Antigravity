@@ -2,6 +2,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomBytes } = require('node:crypto');
+const { publicSettings } = require('../core/settings');
 const { UPDATES_DISABLED, UPDATES_DISABLED_MESSAGE } = require('../features/updater');
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.webp': 'image/webp', '.jpg': 'image/jpeg' };
@@ -145,7 +146,7 @@ function createApi(app) {
       if (method === 'POST' && route === '/api/config') {
         const data = await readBody(request);
         await app.configure(data);
-        return json(response, { ok: true, settings: app.settings.get() });
+        return json(response, { ok: true, settings: publicSettings(app.settings.get()) });
       }
       if (method === 'GET' && route === '/api/mobile/status') {
         return json(response, { ok: true, mobile: app.mobile.snapshot() });
@@ -171,10 +172,13 @@ function createApi(app) {
         const data = await readBody(request);
         // The patch rewrites a signed Google binary, so it is a POST that spells out both axes
         // rather than something a stray GET could trigger.
-        const result = await app.applyKernel({
+        const kernelInput = {
           promptTier: data?.promptTier,
           contextMode: data?.contextMode
-        });
+        };
+        if (data && Object.hasOwn(data, 'promptText')) kernelInput.promptText = data.promptText;
+        if (data?.clearCustomPrompt === true) kernelInput.clearCustomPrompt = true;
+        const result = await app.applyKernel(kernelInput);
         return json(response, { ok: true, ...result, kernel: app.kernelStatus() }, result.ok ? 200 : 409);
       }
       if (method === 'GET' && route === '/api/proxy/status') {

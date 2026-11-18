@@ -4,19 +4,21 @@
 
 ## 当前发布条件
 
-本轮已精简统计浮窗、修复显式代理绕过、手机原生代理来源校验和账户写盘失败事务；最终验收结果由本轮审查记录给出。测试均使用合成账户与临时目录，不代表真实 Google 账户、实际 Antigravity 网络或 cloudflared 公网端到端已验证。
+独立版从源码启动本机后端，不加载在线更新、旧覆盖层、旧窗口宿主或旧 Node 运行时。账户/设置/日志与旧版隔离，Qt 拒绝复用不匹配的后端。Node 后端包是私有实现，不发布到 npm。测试使用合成账户与临时目录，不代表真实 Google 账户、实际 Antigravity 网络或 cloudflared 公网端到端已验证。
 
-公开分发前仍需完成内核补丁来源授权核对，具体证据和涉及范围统一见 [第三方声明](backend/THIRD-PARTY-NOTICES.md)。优化或改写部分实现不等于已取得原有材料的分发许可。
+**当前工作树和 Git 历史暂不应直接公开推送或打包。** 当前内核补丁已改为仓库内独立实现，不加载或打包 agy-tool；历史参考、支持的二进制观察和实际依赖边界见 [第三方声明](backend/THIRD-PARTY-NOTICES.md)。公开分发前仍需核对实际 Antigravity 文件、运行时和其他依赖的许可条件。
+
+现有独立历史的根提交包含早期版本的内核补丁。若要公开分发，应从当前复核通过的源码另建发布目录和新的 Git 历史；只关闭功能或隐藏界面入口，不能清除旧提交中的代码。
 
 本目录从核准文件清单复制源码，不携带原开发仓库的 .git、个人运行数据或本机验收证据。原开发仓库及其历史保持原样；本目录单独初始化历史，不添加原仓库远程、分支或标签。
 
 ## 验证独立历史与导出源码
 
-仅在本目录完成回归、文件清单和敏感信息复核后创建根提交，提交身份使用项目通用身份。核对仅有一个根提交、工作树干净且没有远程与标签：
+仅在本目录完成回归、文件清单和敏感信息复核后创建根提交，提交身份使用项目通用身份。首次建立独立历史时核对初始根提交。之后允许有本项目自己的后续提交；发布前核对工作树干净、远程仅指向自己的仓库（或未设置），以及没有旧上游标签：
 
 ~~~powershell
 git status --short
-git rev-list --count --all
+git rev-list --max-parents=0 main
 git log --format="%h %an <%ae>" --all
 git remote -v
 git tag --list
@@ -30,11 +32,11 @@ git archive --format=zip --output=../Go-Antigravity-source.zip HEAD
 
 归档只含该提交的受跟踪文件，不含未提交修改、未跟踪文件或 .git。不要复制原开发仓库的 .git、fetch 原历史或推送原分支／标签。建立本地独立历史并不代表已上传或获准公开分发。
 
-公开快照只应含审查通过的源码、测试、文档、必要静态资源与许可证。不得包含账户／settings、Token／主密钥、隧道 YAML／证书、日志、运行目录、旧备份、EXE、node_modules、.venv-qt、.git、.dsh-ops 或本机验收证据。只凭 .gitignore 不能证明未泄露：受跟踪旧文件和历史仍需单独核对。
+公开快照只应含审查通过的源码、测试、文档、必要静态资源与许可证。不得包含账户／settings、Token／主密钥、隧道 YAML／证书、日志、运行目录、旧备份、EXE、node_modules、.venv-qt、.go-antigravity-data、.git、.dsh-ops 或本机验收证据。只凭 .gitignore 不能证明未泄露：受跟踪旧文件和历史仍需单独核对。
 
 ## 干净环境验证
 
-运行条件为 Windows、Python 3.10+、Node.js 22+（含 npm）；首次安装需要联网。依赖版本由 backend/package-lock.json 和 desktop-qt/requirements.txt 锁定。验证请在不含个人账户或凭据的临时目录执行。
+运行条件为 Windows、Python 3.10+、Node.js 22+（含 npm）；首次安装需要联网。依赖版本由 backend/package-lock.json 和 desktop-qt/requirements.txt 锁定。验证请在不含个人账户或凭据的临时目录执行。首次启动选择系统 Node，不回退旧 `easyag-node.exe`。发布验证只连接公共包仓库安装测试依赖，不启动真实账户、客户端或公网远程。
 
 ~~~powershell
 npm --prefix backend ci

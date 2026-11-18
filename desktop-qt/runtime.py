@@ -19,30 +19,28 @@ from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkProxy, QNetworkReply,
 from backend_client import extract_boot_token, local_request
 
 
+BACKEND_PROTOCOL = "go-antigravity/desktop-v1"
+
+
 def backend_data_directory(root: Path, environment: QProcessEnvironment) -> Path:
-    """Retain explicit and legacy native-host data before using a new portable pool."""
-    configured = environment.value("EASYAG_DATA_DIR").strip()
-    if configured:
-        return Path(configured).expanduser().resolve()
-    local_app_data = environment.value("LOCALAPPDATA").strip()
-    if local_app_data:
-        legacy = Path(local_app_data) / "com.easyag.launcher.tauri"
-        if any((legacy / name).is_file() for name in ("accounts.json", "settings.json")):
-            return legacy.resolve()
-    return (Path(root) / "backend").resolve()
+    configured = environment.value("GO_ANTIGRAVITY_DATA_DIR").strip()
+    return (root / (configured or ".go-antigravity-data")).resolve()
 
 
-def backend_node_executable(root: Path, environment: QProcessEnvironment) -> Path | None:
-    """Honor the launcher's validated Node selection, then portable/PATH launches."""
-    configured = environment.value("EASYAG_NODE_EXE").strip()
-    if configured:
-        candidate = Path(configured).expanduser()
-        return candidate.resolve() if candidate.is_file() else None
-    bundled = Path(root) / "easyag-node.exe"
-    if bundled.is_file():
-        return bundled.resolve()
-    system = QStandardPaths.findExecutable("node.exe")
-    return Path(system).resolve() if system else None
+def data_directory_id(directory: Path) -> str:
+    canonical = directory.resolve().as_posix()
+    if os.name == "nt":
+        canonical = canonical.lower()
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def backend_node_executable(environment: QProcessEnvironment) -> Path | None:
+    """Honor the bootstrap's validated system Node, or look up node.exe on PATH."""
+    selected = environment.value("GO_ANTIGRAVITY_NODE_EXE").strip() or QStandardPaths.findExecutable("node.exe")
+    if not selected:
+        return None
+    candidate = Path(selected).resolve()
+    return candidate if candidate.name.lower() == "node.exe" and candidate.is_file() else None
 
 
 def is_project_backend_process(root: Path, process: dict[str, Any]) -> bool:
@@ -57,7 +55,7 @@ def is_project_backend_process(root: Path, process: dict[str, Any]) -> bool:
     normalize = lambda value: ntpath.normcase(ntpath.normpath(value))
     expected = normalize(str(Path(root).resolve() / "backend" / "server.js"))
     node = ntpath.basename(executable).lower()
-    return (node in ("node.exe", "easyag-node.exe") and ntpath.isabs(tokens[1])
+    return (node == "node.exe" and ntpath.isabs(tokens[1])
             and normalize(tokens[1]) == expected)
 
 
@@ -154,6 +152,7 @@ class BackendRuntime(QObject):
         self._probe_running = False
         self._temporary: tempfile.TemporaryDirectory | None = None
         self._ready_path: Path | None = None
+        self._data_directory = backend_data_directory(self.root, QProcessEnvironment.systemEnvironment())
         self._lock: QLockFile | None = None
         self._lock_deadline = 0.0
         self._startup_deadline = 0.0
@@ -183,13 +182,11 @@ class BackendRuntime(QObject):
         if not self._active or self._closing:
             return
         self._existing_pids = []
-        executable = str(backend_node_executable(self.root, QProcessEnvironment.systemEnvironment()) or "").replace("'", "''")
         script = (
             "$ErrorActionPreference='Stop';"
             "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);"
-            f"$exe='{executable}';"
             "$processes=@(Get-CimInstance Win32_Process | Where-Object {"
-            "$_.Name -ieq 'easyag-node.exe' -or $_.Name -ieq 'node.exe' -or ($exe -and $_.ExecutablePath -ieq $exe)"
+            "$_.Name -ieq 'node.exe'"
             "} | ForEach-Object {@{pid=[int]$_.ProcessId;executable=$_.ExecutablePath;commandLine=$_.CommandLine}});"
             "$ids=@($processes | ForEach-Object {$_.pid});$listeners=@();if($ids.Count -gt 0){"
             "$listeners=@(Get-NetTCPConnection -State Listen | Where-Object {"
@@ -291,9 +288,12 @@ class BackendRuntime(QObject):
             def status_done(code: int, raw: bytes) -> None:
                 try:
                     value = json.loads(raw.decode("utf-8"))
-                    valid = (code == 200 and isinstance(value, dict) and "phase" in value
-                             and "accounts" in value and "capabilities" in value and "mobile" in value)
-                except (ValueError, UnicodeDecodeError):
+                    valid = (code == 200 and isinstance(value, dict)
+                             and value.get("backendProtocol") == BACKEND_PROTOCOL
+                             and value.get("dataDirectoryId") == data_directory_id(self._data_directory)
+                             and value.get("updatesEnabled") is False
+                             and all(key in value for key in ("phase", "accounts", "capabilities", "mobile")))
+                except (ValueError, OSError):
                     valid = False
                 callback(valid)
 
@@ -334,7 +334,7 @@ class BackendRuntime(QObject):
 
     def _after_discovery(self) -> None:
         if self._existing_pids:
-            self._fail("已发现本项目后端，但接口暂不可用；为避免重复启动，请等待服务就绪后重试")
+            self._fail("已发现同目录的后端，但版本、数据目录或接口不匹配。请关闭旧后端或等待启动完成后重试")
             return
         if self._waiting_for_lock:
             self._waiting_for_lock = False
@@ -362,7 +362,7 @@ class BackendRuntime(QObject):
 
     def _spawn_backend(self) -> None:
         environment = QProcessEnvironment.systemEnvironment()
-        executable = backend_node_executable(self.root, environment)
+        executable = backend_node_executable(environment)
         source = self.root / "backend" / "server.js"
         if executable is None or not source.is_file():
             self._fail("未找到 Node.js 22+ 或 backend/server.js，请使用项目启动脚本准备依赖")
@@ -382,15 +382,15 @@ class BackendRuntime(QObject):
             self._fail("无法记录本地后端运行目录，请检查临时目录权限")
             return
         self._ready_path = temporary / "ready.json"
-        environment = QProcessEnvironment.systemEnvironment()
-        environment.insert("EASYAG_TAURI", "1")
-        environment.insert("EASYAG_READY_FILE", str(self._ready_path))
-        data_directory = temporary / "data" if self.test_mode else backend_data_directory(self.root, environment)
-        environment.insert("EASYAG_DATA_DIR", str(data_directory))
+        environment.insert("GO_ANTIGRAVITY_QT_HOST", "1")
+        environment.insert("GO_ANTIGRAVITY_READY_FILE", str(self._ready_path))
         if self.test_mode:
-            environment.insert("EASYAG_TEST_MODE", "1")
+            self._data_directory = temporary / "data"
+        environment.insert("GO_ANTIGRAVITY_DATA_DIR", str(self._data_directory))
+        if self.test_mode:
+            environment.insert("GO_ANTIGRAVITY_TEST_MODE", "1")
         else:
-            environment.remove("EASYAG_TEST_MODE")
+            environment.remove("GO_ANTIGRAVITY_TEST_MODE")
         child = QProcess(self)
         self._child = child
         self.owns_process = True

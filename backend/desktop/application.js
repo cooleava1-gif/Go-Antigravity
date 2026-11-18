@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { randomUUID } = require('node:crypto');
-const { createSettings, normalizeSettings, assertLaunchSettingsMutable } = require('../core/settings');
+const { createHash, randomUUID } = require('node:crypto');
+const { createSettings, normalizeSettings, assertLaunchSettingsMutable, publicSettings } = require('../core/settings');
 const { createAccounts } = require('../core/accounts');
 const { createAgCred } = require('../core/agcred');
 const { createCredentialVault } = require('../core/vault');
@@ -21,14 +21,17 @@ const { createApi } = require('./api');
 const { LanguageService } = require('../adapters/desktop/language-service');
 const { ContextMonitor } = require('../features/context-monitor');
 const { createSourceGuard } = require('../features/source-guard');
-const { inspectKernel, applyKernelPatch, CONTEXT_MODES, PROMPT_TIERS, CONTEXT_SIGNATURES } = require('../features/kernel-patch');
+const { inspectKernel, applyKernelPatch, CONTEXT_MODES, PROMPT_TIERS, CONTEXT_SIGNATURES, CUSTOM_PROMPT_CAPACITY, customPromptMetadata } = require('../features/kernel-patch');
 const { probeProxy } = require('../features/proxy-probe');
 const { createAgLogWatcher } = require('../features/ag-log-watch');
 const { createMobileAccess } = require('../features/mobile-access');
 const { createMobileSecrets, credentialError } = require('../core/mobile-secrets');
 
-async function createApplication({ rootDir, dataDir, native = false, testMode = false, mobileVault, agCred, agQuota, agUsage, kernelInspector = inspectKernel, kernelPatcher = applyKernelPatch, openUrl = openInBrowser, onClose = () => {} }) {
+async function createApplication({ rootDir, dataDir, readyFile, native = false, testMode = false, mobileVault, agCred, agQuota, agUsage, kernelInspector = inspectKernel, kernelPatcher = applyKernelPatch, openUrl = openInBrowser, onClose = () => {} }) {
   fs.mkdirSync(dataDir, { recursive: true });
+  const canonicalDataDir = fs.realpathSync.native(dataDir);
+  const scopedPath = process.platform === 'win32' ? canonicalDataDir.replaceAll('\\', '/').toLowerCase() : canonicalDataDir;
+  const dataDirectoryId = createHash('sha256').update(scopedPath).digest('hex');
   const events = new Events(dataDir);
   const settings = createSettings(path.join(dataDir, 'settings.json'));
   const agcred = agCred || createAgCred({ scriptPath: path.join(rootDir, 'tools', 'agcred.ps1') });
@@ -37,7 +40,7 @@ async function createApplication({ rootDir, dataDir, native = false, testMode = 
   // Test mode skips the vault entirely: no credential store access, plaintext on disk.
   const vault = testMode ? null : createCredentialVault({
     agcred,
-    plaintext: process.env.EASYAG_PLAINTEXT_TOKENS === '1',
+    plaintext: process.env.GO_ANTIGRAVITY_PLAINTEXT_TOKENS === '1',
     log: (message, level) => events.log('SYSTEM', message, level || 'tag-proxy')
   });
   if (vault) await vault.unlock();
@@ -52,7 +55,7 @@ async function createApplication({ rootDir, dataDir, native = false, testMode = 
   const agusage = agUsage || createAgUsage(testMode ? { conversationsDir: path.join(dataDir, 'conversations') } : {});
   const desktop = createDesktopAdapter(testMode);
   let dictionary = loadDictionary(rootDir);
-  const host = createHost({ native, testMode, events });
+  const host = createHost({ testMode, events });
   const languageService = new LanguageService({ profile: () => desktop.profile });
   const sourceGuard = createSourceGuard({ rootDir });
   const live = { at: 0, refreshToken: null, running: null };
@@ -167,7 +170,25 @@ async function createApplication({ rootDir, dataDir, native = false, testMode = 
   });
   const kernelDesired = () => {
     const current = settings.get();
-    return { promptTier: current.promptTier, contextMode: current.contextMode };
+    const desired = { promptTier: current.promptTier, contextMode: current.contextMode };
+    if (current.promptTier === 'custom' && current.customSystemPrompt) {
+      desired.customHash = customPromptMetadata(current.customSystemPrompt).hash;
+    }
+    return desired;
+  };
+  const customPromptStatus = () => {
+    const current = settings.get();
+    if (!current.customSystemPrompt) {
+      return { available: false, bytes: 0, hash: null, updatedAt: null, capacity: CUSTOM_PROMPT_CAPACITY };
+    }
+    const metadata = customPromptMetadata(current.customSystemPrompt);
+    return {
+      available: true,
+      bytes: metadata.bytes,
+      hash: metadata.hash,
+      updatedAt: current.customPromptUpdatedAt || null,
+      capacity: metadata.capacity
+    };
   };
   const cdp = new CdpHub({
     profile: () => desktop.profile,
@@ -222,10 +243,20 @@ async function createApplication({ rootDir, dataDir, native = false, testMode = 
       const automatic = {};
       // A numeric legacy preference is not consent to replace it with a new payload.
       // Context-only recovery must also leave every legacy prompt byte untouched.
-      const allowPrompt = settings.get().promptPayloadVersion === 2
-        && ["stock", "3", "4"].includes(desired.promptTier)
+      const savedSettings = settings.get();
+      const allowPrompt = savedSettings.promptPayloadVersion === 2
+        && ['stock', '3', '4', 'custom'].includes(desired.promptTier)
+        && (desired.promptTier !== 'custom' || Boolean(savedSettings.customSystemPrompt))
         && !existing.some(target => target.promptLegacy || target.promptPayloadVersion === 1);
-      if (allowPrompt && existing.some(target => target.promptTier !== desired.promptTier)) automatic.promptTier = desired.promptTier;
+      // A fresh default must not silently replace an already selected non-stock payload. A
+      // saved custom prompt is explicit consent; otherwise automatic migration is limited to
+      // pristine/unknown targets and the current desired tier.
+      const promptMigrationAllowed = desired.promptTier === 'custom'
+        || existing.every(target => !target.promptTier || target.promptTier === 'stock' || target.promptTier === desired.promptTier);
+      if (allowPrompt && promptMigrationAllowed && existing.some(target => target.promptTier !== desired.promptTier)) {
+        automatic.promptTier = desired.promptTier;
+      }
+      if (automatic.promptTier === 'custom') automatic.promptText = savedSettings.customSystemPrompt;
       if (existing.some(target => target.contextMode !== desired.contextMode)) automatic.contextMode = desired.contextMode;
       if (settings.get().autoApplyKernelPatch && Object.keys(automatic).length) {
         events.log('SYSTEM', '检测到内核设置变化，正在同步已确认的选项', 'tag-proxy');
@@ -350,7 +381,8 @@ async function createApplication({ rootDir, dataDir, native = false, testMode = 
     accountsSnapshot,
     status() {
       return {
-        ...settings.get(), ...session.snapshot(), ...cdp.status, ...updater.currentState(),
+        ...publicSettings(settings.get()), ...session.snapshot(), ...cdp.status, ...updater.currentState(),
+        backendProtocol: 'go-antigravity/desktop-v1', dataDirectoryId,
         dictEntries: Object.keys(dictionary).length, capabilities: desktop.capabilities,
         accounts: accounts.snapshot(live.refreshToken),
         oauthFlow: oauthFlows.active(),
@@ -371,6 +403,7 @@ async function createApplication({ rootDir, dataDir, native = false, testMode = 
       const inspection = readKernelInspection(refresh);
       return {
         desired: kernelDesired(),
+        customPrompt: customPromptStatus(),
         promptPreferenceVersion: settings.get().promptPayloadVersion,
         autoApplyKernelPatch: settings.get().autoApplyKernelPatch,
         contextCap: effectiveContextCap(),
@@ -397,9 +430,13 @@ async function createApplication({ rootDir, dataDir, native = false, testMode = 
     // Persist a verified patch as the preference for the next launch. The running
     // instance keeps the capacity captured at its own launch until it exits.
     async applyKernel(input = {}) {
+      const incoming = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
       const current = settings.get();
-      const explicitAxes = input.promptTier !== undefined || input.contextMode !== undefined;
-      const request = explicitAxes ? { ...input } : { contextMode: current.contextMode };
+      const explicitAxes = incoming.promptTier !== undefined || incoming.contextMode !== undefined;
+      const request = explicitAxes ? { ...incoming } : { contextMode: current.contextMode };
+      if (request.promptTier === 'custom' && request.promptText === undefined) {
+        request.promptText = current.customSystemPrompt;
+      }
       const result = await runKernelPatch(request);
       for (const line of result.logs) events.log('KERNEL', line, result.ok ? 'tag-proxy' : 'tag-warn');
       for (const line of result.errors) events.log('KERNEL', line, 'tag-alert');
@@ -409,12 +446,23 @@ async function createApplication({ rootDir, dataDir, native = false, testMode = 
         const saved = {};
         if (result.promptTier != null) saved.promptTier = result.promptTier;
         if (result.contextMode != null) saved.contextMode = result.contextMode;
-        if (input.promptTier !== undefined && result.promptTier != null) saved.promptPayloadVersion = 2;
+        if (incoming.promptTier !== undefined && result.promptTier != null) saved.promptPayloadVersion = 2;
+        if (result.promptTier === 'custom' && request.promptText !== undefined) {
+          saved.customSystemPrompt = request.promptText;
+          saved.customPromptUpdatedAt = Date.now();
+        }
+        if (incoming.clearCustomPrompt === true) {
+          saved.customSystemPrompt = '';
+          saved.customPromptUpdatedAt = 0;
+        }
         await app.configure(saved);
       } else {
         events.publish({ kernel: app.kernelStatus() });
       }
       return { ok: result.ok, logs: result.logs, errors: result.errors };
+    },
+    publicSettings() {
+      return publicSettings(settings.get());
     },
     selectAccount(id) {
       if (accountTransition || ['preparing', 'launching'].includes(session.phase)) {
@@ -846,9 +894,8 @@ async function createApplication({ rootDir, dataDir, native = false, testMode = 
     async start() {
       const port = await api.listen(native ? 0 : 19823);
       app.apiPort = port;
-      void host.resizeWindow();
-      events.log('SYSTEM', `星桥工作台 桌面内核就绪，已载入 ${Object.keys(dictionary).length} 条汉化词条`, 'tag-proxy');
-      if (process.env.EASYAG_READY_FILE) writeJson(process.env.EASYAG_READY_FILE, { port, pid: process.pid });
+      events.log('SYSTEM', `Go-Antigravity 本地后端就绪，已载入 ${Object.keys(dictionary).length} 条汉化词条`, 'tag-proxy');
+      if (readyFile) writeJson(readyFile, { port, pid: process.pid });
       if (!native && !testMode) host.open(`http://127.0.0.1:${port}`);
       void session.attachExisting().catch(error => events.log('SYSTEM', error.message, 'tag-warn'));
       void refreshLive(true).then(() => {
@@ -874,7 +921,6 @@ async function createApplication({ rootDir, dataDir, native = false, testMode = 
         events.log('SYSTEM', '正在退出: ' + reason, 'tag-warn');
         await mobile.close();
         const result = await session.close(reason);
-        host.dispose();
         api.close();
         onClose(result);
         return result;

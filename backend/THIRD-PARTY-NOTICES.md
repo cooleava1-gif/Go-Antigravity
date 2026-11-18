@@ -27,26 +27,31 @@ Official references:
 - https://www.riverbankcomputing.com/commercial/license-faq
 - https://doc.qt.io/qt-6/licensing.html
 
-## agy-tool — permission not yet verified
+## Historical agy-tool reference
 
 Source: https://github.com/justhil/agy-tool
 
 Reference examined on 2026-11-18: commit `237df0b5f603122cc765aebe59b1dd1e2a06637e`,
-particularly `src/patcher.rs`. The known adaptation is confined to the kernel patching
-module: context byte signatures, the embedded-template layout and the original prompt
-patching approach in `features/kernel-patch.js`. It is not a description of the whole app.
-The current JavaScript implementation has its own validation, transaction handling and
-prompt versions; the Rust file is provenance, not the authority for current behavior.
+particularly `src/patcher.rs`. It informed the supported Antigravity binary observations
+used by the kernel work: template paths, fixed-size slots and context signatures. It is
+not a description of the whole app or a runtime dependency.
+
+The current `backend/features/kernel-patch.js` and `backend/features/kernel-custom-prompt.js`
+are authored in this repository. They do not import, bundle or execute agy-tool source or
+its runtime. PE32+ parsing, embed.FS validation, prompt planning, fixed-size writes,
+readback checks and rollback handling are implemented locally. The signatures and template
+paths describe the supported Antigravity builds; they are compatibility observations rather
+than copied source text.
 
 The checked tree, Cargo.toml and README supplied no explicit license establishing
 redistribution permission; GitHub repository metadata reported `license: null`. An older
 local comment asserting MIT was unsupported and has been removed. No particular upstream
 license is claimed here, and this finding does not rule out separate permission.
 
-Before public redistribution, obtain verifiable permission for the adapted material
-(including any required notices), or replace/remove it using an independently established
-source. Partial optimization does not establish independent provenance. This remains a
-release gate; unrelated dependency and project notices are retained.
+No particular agy-tool license is claimed here, and the historical reference does not grant
+rights to redistribute the Antigravity binary. Public distribution must still verify the
+terms of the actual Antigravity files, bundled dependencies and any separately shipped
+runtime components. Unrelated dependency and project notices remain in force.
 
 ## Antigrative Dashboard / AG Pulse
 

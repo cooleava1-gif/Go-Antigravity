@@ -24,8 +24,15 @@ def demo_snapshot():
         "cdpSockets": 0,
         "kernel": {
             "platformSupported": True,
-            "desired": {"promptTier": "4", "contextMode": "512k"},
-            "targets": [{"exists": True, "backupExists": True, "promptTier": "4", "contextMode": "512k"}],
+            "desired": {"promptTier": "3", "contextMode": "512k"},
+            "customPrompt": {
+                "available": False,
+                "bytes": 0,
+                "hash": None,
+                "updatedAt": None,
+                "capacity": 3960,
+            },
+            "targets": [{"exists": True, "backupExists": True, "promptTier": "3", "contextMode": "512k"}],
         },
         "proxy": {
             "enabled": True,

@@ -8,9 +8,10 @@ const vm = require('node:vm');
 const bundledPackage = require('../package.json');
 const { Updater, resolveRuntimeRoot } = require('../features/updater');
 const { loadDictionary } = require('../features/i18n');
+const { resolveDataDirectory } = require('../core/runtime-data');
 
 function fixture(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'starbridge-update-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'go-antigravity-update-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
@@ -117,10 +118,15 @@ test('bundled dictionaries ignore downloaded overrides while retaining sanitizat
   assert.deepEqual(tree(dir), before);
 });
 
-test('server boot only imports bundled application and preserves native/data environment options', async t => {
+for (const explicitlyConfigured of [false, true]) test(`server boot uses only its source and independent data options (override=${explicitlyConfigured})`, async t => {
   const dir = fixture(t);
   hostileData(dir);
-  const bundledRoot = path.join(dir, 'bundle');
+  const checkout = path.join(dir, 'bundle');
+  const bundledRoot = path.join(checkout, 'backend');
+  const expectedData = path.join(checkout, explicitlyConfigured ? 'explicit-data' : '.go-antigravity-data');
+  const readyFile = path.join(dir, 'independent-ready.json');
+  const stdin = {};
+  const inputEvents = [];
   const source = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   const imports = [];
   let received;
@@ -130,14 +136,26 @@ test('server boot only imports bundled application and preserves native/data env
   vm.runInNewContext(source, {
     __dirname: bundledRoot, console, setTimeout,
     process: {
-      env: { EASYAG_DATA_DIR: dir, EASYAG_TEST_MODE: '1', EASYAG_DISABLE_OVERLAY: '0', EASYAG_UPDATE_URL: 'https://untrusted.invalid/' },
+      pkg: true, stdin,
+      execPath: path.join(dir, 'legacy-runtime', 'easyag-node.exe'),
+      env: {
+        EASYAG_DATA_DIR: dir, EASYAG_TAURI: '1', EASYAG_READY_FILE: path.join(dir, 'old-ready.json'),
+        EASYAG_TEST_MODE: '1', EASYAG_DISABLE_OVERLAY: '0', EASYAG_UPDATE_URL: 'https://untrusted.invalid/',
+        ...(explicitlyConfigured ? {
+          GO_ANTIGRAVITY_DATA_DIR: 'explicit-data', GO_ANTIGRAVITY_QT_HOST: '1',
+          GO_ANTIGRAVITY_READY_FILE: readyFile, GO_ANTIGRAVITY_TEST_MODE: '1'
+        } : {})
+      },
       once() {}, on() {}, exit: code => assert.fail('unexpected exit ' + code)
     },
     require: name => {
       imports.push(name);
-      if (name === 'node:path') return path;
-      if (name === 'node:readline') return { createInterface: () => assert.fail('non-native boot must not open stdin') };
-      if (name === './adapters/desktop/discovery') return { normalizePath: value => value };
+      if (name === './core/runtime-data') return { resolveDataDirectory };
+      if (name === 'node:readline') return { createInterface: ({ input }) => {
+        assert.equal(explicitlyConfigured, true, 'non-native boot must not open stdin');
+        assert.equal(input, stdin);
+        return { on(event) { inputEvents.push(event); return this; } };
+      } };
       if (name === './desktop/application') return { createApplication: async options => {
         received = options;
         return { start: async () => { started++; signalStarted(); } };
@@ -148,9 +166,11 @@ test('server boot only imports bundled application and preserves native/data env
   await booted;
   assert.equal(started, 1);
   assert.equal(received.rootDir, bundledRoot);
-  assert.equal(received.dataDir, dir);
-  assert.equal(received.testMode, true);
-  assert.equal(received.native, false);
+  assert.equal(received.dataDir, expectedData);
+  assert.equal(received.readyFile, explicitlyConfigured ? readyFile : undefined);
+  assert.equal(received.testMode, explicitlyConfigured);
+  assert.equal(received.native, explicitlyConfigured);
+  assert.deepEqual(inputEvents, explicitlyConfigured ? ['line', 'close'] : []);
   assert.equal(typeof received.onClose, 'function');
   assert.equal(imports.includes('./features/updater'), false);
 });

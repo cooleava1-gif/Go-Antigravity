@@ -50,6 +50,7 @@ function assertConfigUnchanged(fixture) {
 
 const {
   AD_SLOTS, BLOAT_SLOTS, CORE_SLOTS, CONTEXT_SIGNATURES, PROMPT_TIERS, CONTEXT_MODES, SLOT_CAPACITY,
+  CUSTOM_PROMPT_CAPACITY, validateCustomPrompt, customPromptMetadata,
   normalizePromptTier, normalizeContextMode, parseEmbedTemplates, computeActiveBytes, writePaddedTemplate,
   detectPromptTier, detectPromptState, detectContextMode, inspectContextGates, applyPromptTier, applyContextPatch,
   syncContextWindowConfig, detectConfiguredContextCap, inspectKernel, applyKernelPatch, resolveTargets,
@@ -1068,17 +1069,87 @@ test('overlapping apply and direct sync cannot interleave with an active transac
   assertNoTransactionTemps(fixture);
 });
 
-test('only official, balanced and compact are visible while persisted legacy keys remain readable', () => {
-  assert.deepStrictEqual(Object.values(PROMPT_TIERS).filter(tier => tier.visible).map(tier => tier.key).sort(), ['3', '4', 'stock']);
+test('official, compact and custom are visible while balanced and legacy keys remain readable', () => {
+  assert.deepStrictEqual(Object.values(PROMPT_TIERS).filter(tier => tier.visible).map(tier => tier.key).sort(), ['3', 'custom', 'stock']);
   assert.strictEqual(normalizePromptTier('official'), 'stock');
   assert.strictEqual(normalizePromptTier('balanced'), '4');
   assert.strictEqual(normalizePromptTier('compact'), '3');
-  for (const key of ['1', '2']) {
+  assert.strictEqual(normalizePromptTier('custom'), 'custom');
+  assert.strictEqual(normalizePromptTier('replace'), 'custom');
+  for (const key of ['1', '2', '4']) {
     assert.strictEqual(normalizePromptTier(key), key);
     assert.strictEqual(PROMPT_TIERS[key].visible, false);
   }
   assert.strictEqual(normalizePromptTier('toString'), null);
   assert.strictEqual(normalizePromptTier('__proto__'), null);
+});
+
+test('custom prompt helpers enforce the exact 3960-byte UTF-8 contract', () => {
+  const { createHash } = require('node:crypto');
+  const prefix = '先读取再断言 · Unicode ✓ ';
+  const text = prefix + 'x'.repeat(CUSTOM_PROMPT_CAPACITY - Buffer.byteLength(prefix, 'utf8'));
+  assert.strictEqual(CUSTOM_PROMPT_CAPACITY, 3960);
+  assert.strictEqual(validateCustomPrompt(text), text);
+  const metadata = customPromptMetadata(text);
+  assert.deepStrictEqual(metadata, {
+    bytes: Buffer.byteLength(text, 'utf8'),
+    hash: createHash('sha256').update(Buffer.from(text, 'utf8')).digest('hex'),
+    capacity: 3960
+  });
+  assert.strictEqual(metadata.hash.length, 64);
+  assert.strictEqual(metadata.bytes, 3960);
+  for (const invalid of ['', null, undefined, 1, {}, [], 'has\u0000nul', '{{ template }}', 'a }} b', '{{- /*', '*/ -}}', 'x'.repeat(3961), '✓'.repeat(1321)]) {
+    assert.throws(() => validateCustomPrompt(invalid), /自定义|文本|UTF-8|NUL|模板|容量|3960|4088/);
+  }
+  assert.strictEqual(normalizeContextMode('1m'), '900k');
+  assert.strictEqual(normalizeContextMode('max'), '900k');
+  assert.strictEqual(CONTEXT_MODES['900k'].tokens, 983040);
+  assert.strictEqual(CONTEXT_MODES['512k'].tokens, 512000);
+});
+
+test('custom prompt replaces exactly the three core slots and remains byte-verifiable', () => {
+  const original = buildKernel(), slots = parseEmbedTemplates(original);
+  const prefix = '仅替换核心指令层。';
+  const text = prefix + 'A'.repeat(CUSTOM_PROMPT_CAPACITY - Buffer.byteLength(prefix, 'utf8'));
+  assert.strictEqual(Buffer.byteLength(text, 'utf8'), 3960);
+  assert.strictEqual(CORE_SLOTS.length, 3);
+  const coreBytes = CORE_SLOTS.reduce((sum, name) => sum + slots.get(name).dataLength, 0);
+  assert.strictEqual(coreBytes, 4088);
+  const buffer = Buffer.from(original);
+  const result = applyPromptTier(buffer, original, 'custom', undefined, undefined, text);
+  assert.strictEqual(result.strippedBytes, 0);
+  assert.strictEqual(buffer.length, original.length);
+  const allowed = [...CORE_SLOTS.map(name => slots.get(name)), { dataOffset: APPLY_EDITS_OFF + 26, dataLength: 10 }];
+  for (let offset = 0; offset < buffer.length; offset++) {
+    if (buffer[offset] !== original[offset]) assert.ok(allowed.some(slot => offset >= slot.dataOffset && offset < slot.dataOffset + slot.dataLength), 'unexpected byte ' + offset);
+  }
+  for (const [name, slot] of slots) if (!CORE_SLOTS.includes(name)) {
+    assert.ok(buffer.subarray(slot.dataOffset, slot.dataOffset + slot.dataLength).equals(original.subarray(slot.dataOffset, slot.dataOffset + slot.dataLength)), name);
+  }
+  const state = detectPromptState(parseEmbedTemplates(buffer), buffer);
+  assert.strictEqual(state.tier, 'custom');
+  assert.strictEqual(state.payloadVersion, 3);
+  assert.strictEqual(state.legacy, false);
+  assert.strictEqual(state.customText, text);
+  assert.strictEqual(state.customHash, customPromptMetadata(text).hash);
+  assert.strictEqual(state.customBytes, 3960);
+  assert.strictEqual(verifyBackupMatches(buffer, original), null);
+  const restored = Buffer.from(buffer);
+  applyPromptTier(restored, original, 'stock');
+  assert.ok(restored.equals(original), 'custom prompt exact restore');
+});
+
+test('inspect and apply expose custom metadata without echoing full custom text', async t => {
+  const fixture = setupPatchCase(t);
+  const text = '自定义核心指令：核验后汇报。';
+  const applied = await applyKernelPatch({ promptTier: 'custom', contextMode: '900k', promptText: text }, { targets: [fixture.target], homeDir: fixture.home });
+  assert.strictEqual(applied.ok, true, JSON.stringify(applied));
+  const inspected = inspectKernel({ targets: [fixture.target] }).targets[0];
+  assert.strictEqual(inspected.customHash, customPromptMetadata(text).hash);
+  assert.strictEqual(inspected.customBytes, Buffer.byteLength(text, 'utf8'));
+  assert.strictEqual(JSON.stringify(inspected).includes(text), false);
+  const restored = await applyKernelPatch({ promptTier: 'stock', contextMode: 'stock' }, { targets: [fixture.target], homeDir: fixture.home });
+  assert.strictEqual(restored.ok, true, JSON.stringify(restored));
 });
 
 test('legacy payload fingerprints are frozen independently of current payload updates', () => {

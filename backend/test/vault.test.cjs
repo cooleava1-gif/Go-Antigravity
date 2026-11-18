@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { createVault, isEncrypted, PREFIX, KEY_TARGET } = require('../core/vault');
+const { createVault, createCredentialVault, isEncrypted, PREFIX, KEY_TARGET } = require('../core/vault');
 
 function fakeStore(initial = null) {
   let stored = initial;
@@ -89,4 +89,23 @@ test('密钥长度异常的凭据不会被覆盖', async () => {
   const vault = createVault({ readKey: store.readKey, writeKey: store.writeKey });
   assert.equal(await vault.unlock(), false);
   assert.equal(store.peek().toString(), 'too-short', '不能把可疑凭据直接覆盖掉');
+});
+
+test('production vault only addresses the independent release namespace', async () => {
+  const entries = new Map([['easyag:accounts-key', Buffer.alloc(32, 7).toString('base64')]]);
+  const legacyKey = entries.get('easyag:accounts-key');
+  const calls = [];
+  const agcred = { runScript: async (method, value, target) => {
+    calls.push([method, target]);
+    if (method === 'write') entries.set(target, value);
+    else return entries.get(target);
+  } };
+  const vault = createCredentialVault({ agcred, platform: 'win32' });
+  assert.equal(await vault.unlock(), true);
+  assert.deepStrictEqual(calls, [
+    ['read', 'go-antigravity:accounts-key'],
+    ['write', 'go-antigravity:accounts-key'],
+    ['read', 'go-antigravity:accounts-key'],
+  ]);
+  assert.equal(entries.get('easyag:accounts-key'), legacyKey);
 });

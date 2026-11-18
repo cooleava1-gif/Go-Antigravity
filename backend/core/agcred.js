@@ -227,7 +227,7 @@ function createAgCred({ scriptPath, spawnProcess = spawn, execFileAsync = run, p
   };
 
   // `target` selects which Windows credential to touch: AG's own login by default, or the
-  // vault master key (`easyag:accounts-key`) when the account pool needs encrypting.
+  // vault master key (`go-antigravity:accounts-key`) when the account pool needs encrypting.
   async function runScript(mode, stdinB64 = '', target = null) {
     return new Promise((resolve, reject) => {
       const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, '-Mode', mode];

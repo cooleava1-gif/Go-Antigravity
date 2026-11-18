@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $ProjectRoot 'Start-Go-Antigravity.ps1')
 $script:passed = 0
 $script:base = Join-Path ([IO.Path]::GetTempPath()) ('easyag-bootstrap-test-' + [guid]::NewGuid())
-$oldNode = $env:EASYAG_NODE_EXE
+$oldNode = $env:GO_ANTIGRAVITY_NODE_EXE
 $oldCloud = $env:AGY_CLOUDFLARED
 function Assert-True($Value, [string]$Message) { if (-not $Value) { throw $Message } }
 function Assert-Throws([scriptblock]$Action, [string]$Message) {
@@ -26,7 +26,6 @@ function New-Fixture {
     $script:deps = $false
     $script:pythonDeps = $true
     $script:npmExit = 0
-    $script:brokenBundled = $false
     $script:brokenInstall = $false
     $script:pipExit = 0
     $script:calls = @()
@@ -47,7 +46,6 @@ function Invoke-EasyAgCommand {
     $code = 0
     $output = ''
     if ($Arguments -contains '--version') {
-        if ($script:brokenBundled -and $Executable -eq (Join-Path $script:fixture 'easyag-node.exe')) { throw 'Synthetic invalid executable' }
         $output = $script:nodeVersion
     }
     elseif ($Arguments -contains 'ci') {
@@ -77,19 +75,20 @@ function Test-Case([string]$Name, [scriptblock]$Body) {
 }
 try {
     New-Item -ItemType Directory -Path $script:base -Force | Out-Null
-    Test-Case 'system Node fallback and first npm ci' {
+    Test-Case 'system Node and first npm ci' {
         $root = New-Fixture
         Invoke-EasyAgBootstrap $root @() -PrepareOnly
-        Assert-True ($env:EASYAG_NODE_EXE -eq (Join-Path $root 'system/node.exe')) 'System Node was not passed to runtime'
+        Assert-True ($env:GO_ANTIGRAVITY_NODE_EXE -eq (Join-Path $root 'system/node.exe')) 'System Node was not passed to runtime'
         Assert-True (@($script:calls | Where-Object { $_[1] -contains 'ci' }).Count -eq 1) 'Expected one npm ci'
         Assert-True ($script:launches -eq 0) 'PrepareOnly launched desktop'
     }
-    Test-Case 'bundled Node wins and valid dependencies do not reinstall' {
+    Test-Case 'legacy executable is ignored and valid dependencies are reused' {
         $root = New-Fixture
         Set-Content -LiteralPath (Join-Path $root 'easyag-node.exe') -Value 'synthetic bundled'
         Invoke-EasyAgBootstrap $root @() -PrepareOnly
         Invoke-EasyAgBootstrap $root @() -PrepareOnly
-        Assert-True ($env:EASYAG_NODE_EXE -eq (Join-Path $root 'easyag-node.exe')) 'Bundled Node not preferred'
+        Assert-True ($env:GO_ANTIGRAVITY_NODE_EXE -eq (Join-Path $root 'system/node.exe')) 'Legacy executable was preferred'
+        Assert-True (@($script:calls | Where-Object { $_[0] -eq (Join-Path $root 'easyag-node.exe') }).Count -eq 0) 'Legacy executable was invoked'
         Assert-True (@($script:calls | Where-Object { $_[1] -contains 'ci' }).Count -eq 1) 'Repeated npm ci on unchanged dependencies'
     }
     Test-Case 'lock changes trigger npm ci again' {
@@ -139,12 +138,13 @@ try {
         Assert-Throws { Invoke-EasyAgBootstrap $root @('--demo') } 'Python dependency installation failed'
         Assert-True ($script:launches -eq 0) 'pip failure launched desktop'
     }
-    Test-Case 'unusable bundled executable falls back to system Node' {
+    Test-Case 'legacy executable cannot replace missing system Node' {
         $root = New-Fixture
-        Set-Content -LiteralPath (Join-Path $root 'easyag-node.exe') -Value 'synthetic invalid binary'
-        $script:brokenBundled = $true
-        Invoke-EasyAgBootstrap $root @() -PrepareOnly
-        Assert-True ($env:EASYAG_NODE_EXE -eq (Join-Path $root 'system/node.exe')) 'Bad bundled binary blocked system fallback'
+        Set-Content -LiteralPath (Join-Path $root 'easyag-node.exe') -Value 'synthetic legacy'
+        Remove-Item -LiteralPath (Join-Path $root 'system/node.exe')
+        Assert-Throws { Invoke-EasyAgBootstrap $root @() } 'Node.js 22+'
+        Assert-True ($script:launches -eq 0) 'Desktop launched with legacy Node'
+        Assert-True (@($script:calls | Where-Object { $_[1] -contains '--version' }).Count -eq 0) 'Legacy executable was invoked'
     }
     Test-Case 'successful npm exit with broken dependencies still prevents launch' {
         $root = New-Fixture
@@ -192,7 +192,7 @@ try {
     }
     Write-Host ('Bootstrap synthetic tests: ' + $script:passed + ' passed, 0 failed')
 } finally {
-    $env:EASYAG_NODE_EXE = $oldNode
+    $env:GO_ANTIGRAVITY_NODE_EXE = $oldNode
     $env:AGY_CLOUDFLARED = $oldCloud
     if (Test-Path -LiteralPath $script:base) { Remove-Item -LiteralPath $script:base -Recurse -Force }
 }

@@ -1,6 +1,9 @@
 # Local tool audit journals (may contain machine-specific paths)
 .dsh-ops/
 
+# Go-Antigravity runtime data is never part of the source release.
+/.go-antigravity-data/
+
 # 运行时与构建产物（不入库）
 *.exe
 backend/node_modules/

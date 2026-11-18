@@ -1,16 +1,18 @@
 const fs = require('node:fs');
 const { readJson, writeJson } = require('./storage');
-const { normalizePromptTier, normalizeContextMode } = require('../features/kernel-patch');
+const { normalizePromptTier, normalizeContextMode, validateCustomPrompt } = require('../features/kernel-patch');
 
 const DEFAULTS = Object.freeze({
   port: 7890,
   enableI18n: true,
   enableContextMonitor: true,
-  // New installs use balanced v2 core guidance and a 512K local ceiling. Existing files
+  // New installs use compact v2 core guidance and a 512K local ceiling. Existing files
   // without a payload version remain v1 preferences until an explicit prompt application.
-  promptTier: '4',
+  promptTier: '3',
   promptPayloadVersion: 2,
   contextMode: '512k',
+  customSystemPrompt: '',
+  customPromptUpdatedAt: 0,
   autoApplyKernelPatch: true,
   // Verified before every launch: a dead or misrouted proxy is what AG reports as an opaque
   // "HTTP 400 / User location is not supported" dialog, so the launcher checks the exit itself.
@@ -61,6 +63,17 @@ function normalizeSettings(input = {}, previous = DEFAULTS) {
     if (![1, 2].includes(input.promptPayloadVersion)) throw new Error("promptPayloadVersion 取值不受支持");
     result.promptPayloadVersion = input.promptPayloadVersion;
   }
+  if (input.customSystemPrompt !== undefined) {
+    if (typeof input.customSystemPrompt !== 'string') throw new Error('customSystemPrompt 必须是文本');
+    if (input.customSystemPrompt) validateCustomPrompt(input.customSystemPrompt);
+    result.customSystemPrompt = input.customSystemPrompt;
+  }
+  if (input.customPromptUpdatedAt !== undefined) {
+    if (!Number.isSafeInteger(input.customPromptUpdatedAt) || input.customPromptUpdatedAt < 0) {
+      throw new Error('customPromptUpdatedAt 必须是非负整数');
+    }
+    result.customPromptUpdatedAt = input.customPromptUpdatedAt;
+  }
   if (input.mobileMode !== undefined) {
     if (!['quick', 'fixed'].includes(input.mobileMode)) throw new Error('手机远程模式必须是 quick 或 fixed');
     result.mobileMode = input.mobileMode;
@@ -91,4 +104,11 @@ function assertLaunchSettingsMutable(input, previous, phase) {
   }
 }
 
-module.exports = { DEFAULTS, KERNEL_DEFAULTS, normalizeMobileUrl, normalizeSettings, createSettings, assertLaunchSettingsMutable };
+function publicSettings(value = {}) {
+  const result = { ...value };
+  delete result.customSystemPrompt;
+  delete result.customPromptUpdatedAt;
+  return result;
+}
+
+module.exports = { DEFAULTS, KERNEL_DEFAULTS, normalizeMobileUrl, normalizeSettings, createSettings, publicSettings, assertLaunchSettingsMutable };

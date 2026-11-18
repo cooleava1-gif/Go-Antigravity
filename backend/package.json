@@ -2,6 +2,7 @@
   "name": "go-antigravity",
   "version": "1.0.0",
   "edition": "independent",
+  "private": true,
   "description": "Go-Antigravity local API backend for the PyQt desktop and mobile access",
   "main": "server.js",
   "bin": "server.js",

@@ -78,6 +78,9 @@ class BackendOwnershipTests(unittest.TestCase):
         self.backend.ready.connect(self.ready.append)
         self.backend.failed.connect(self.errors.append)
         self.compatible_ports = {19823, 32123}
+        self.status = {"phase": "idle", "accounts": {}, "capabilities": {}, "mobile": {},
+                       "backendProtocol": runtime.BACKEND_PROTOCOL, "updatesEnabled": False,
+                       "dataDirectoryId": runtime.data_directory_id(self.backend._data_directory)}
         self.backend._get = self.synthetic_get
 
     def tearDown(self):
@@ -90,7 +93,7 @@ class BackendOwnershipTests(unittest.TestCase):
         if port not in self.compatible_ports:
             callback(503, b"")
         elif url.endswith("/api/status"):
-            callback(200, json.dumps({"phase": "idle", "accounts": {}, "capabilities": {}, "mobile": {}}).encode())
+            callback(200, json.dumps(self.status).encode())
         else:
             callback(200, b'<script>window.__EASYAG_TOKEN__="0123456789abcdef0123456789abcdef";</script>')
 
@@ -117,6 +120,25 @@ class BackendOwnershipTests(unittest.TestCase):
         self.discover({"pids": 4242, "ports": 19823})
         self.assertEqual(self.ready, ["http://127.0.0.1:19823"])
         self.assertEqual(self.errors, [])
+
+    def assert_backend_rejected(self, **status):
+        self.status.update(status)
+        self.discover({"pids": [4242], "ports": [32123]})
+        self.assertEqual(self.ready, [])
+        self.assertEqual(len(self.requests), 2)
+        self.assertTrue(self.requests[-1].endswith("/api/status"))
+        self.assertEqual(len(self.errors), 1)
+        self.backend._acquire_launch_lock.assert_not_called()
+        self.backend._spawn_backend.assert_not_called()
+
+    def test_wrong_backend_protocol_is_not_reused(self):
+        self.assert_backend_rejected(backendProtocol="legacy")
+
+    def test_wrong_data_directory_is_not_reused(self):
+        self.assert_backend_rejected(dataDirectoryId="different")
+
+    def test_updates_enabled_backend_is_not_reused(self):
+        self.assert_backend_rejected(updatesEnabled=True)
 
     def test_unresponsive_project_does_not_fall_back_to_foreign_default(self):
         self.compatible_ports = {19823}
@@ -175,57 +197,44 @@ class BackendOwnershipTests(unittest.TestCase):
 
 
 class BackendDataDirectoryTests(unittest.TestCase):
-    def test_explicit_data_directory_wins_over_legacy(self):
+    def test_legacy_settings_and_account_pool_are_ignored(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
+            root = base / "project"
             legacy = base / "local" / "com.easyag.launcher.tauri"
-            legacy.mkdir(parents=True)
-            (legacy / "accounts.json").write_text("{}", encoding="utf-8")
+            portable = root / "backend"
+            for location in (legacy, portable):
+                location.mkdir(parents=True)
+                (location / "accounts.json").write_text("{}", encoding="utf-8")
+                (location / "settings.json").write_text("{}", encoding="utf-8")
             environment = runtime.QProcessEnvironment()
             environment.insert("LOCALAPPDATA", str(base / "local"))
-            environment.insert("EASYAG_DATA_DIR", str(base / "custom"))
-            self.assertEqual(runtime.backend_data_directory(base / "project", environment), (base / "custom").resolve())
-
-    def test_existing_native_account_pool_wins_over_new_portable_pool(self):
-        with tempfile.TemporaryDirectory() as directory:
-            base = Path(directory)
-            legacy = base / "local" / "com.easyag.launcher.tauri"
-            legacy.mkdir(parents=True)
-            (legacy / "accounts.json").write_text("{}", encoding="utf-8")
-            portable = base / "project" / "backend"
-            portable.mkdir(parents=True)
-            (portable / "accounts.json").write_text("{}", encoding="utf-8")
-            environment = runtime.QProcessEnvironment()
-            environment.insert("LOCALAPPDATA", str(base / "local"))
-            self.assertEqual(runtime.backend_data_directory(base / "project", environment), legacy.resolve())
-
-    def test_existing_native_settings_keep_data_directory(self):
-        with tempfile.TemporaryDirectory() as directory:
-            base = Path(directory)
-            legacy = base / "com.easyag.launcher.tauri"
-            legacy.mkdir()
-            (legacy / "settings.json").write_text("{}", encoding="utf-8")
-            environment = runtime.QProcessEnvironment()
-            environment.insert("LOCALAPPDATA", str(base))
-            self.assertEqual(runtime.backend_data_directory(base / "project", environment), legacy.resolve())
-
-    def test_fresh_install_uses_portable_directory_without_writes(self):
-        with tempfile.TemporaryDirectory() as directory:
-            base = Path(directory)
-            environment = runtime.QProcessEnvironment()
-            environment.insert("LOCALAPPDATA", str(base / "local"))
-            expected = (base / "project" / "backend").resolve()
-            self.assertEqual(runtime.backend_data_directory(base / "project", environment), expected)
+            environment.insert("EASYAG_DATA_DIR", str(legacy))
+            expected = (root / ".go-antigravity-data").resolve()
+            self.assertEqual(runtime.backend_data_directory(root, environment), expected)
             self.assertFalse(expected.exists())
+
+    def test_explicit_independent_directory_can_be_absolute_or_checkout_relative(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / "project"
+            environment = runtime.QProcessEnvironment()
+            for setting, expected in ((str(base / "custom"), base / "custom"),
+                                      ("dedicated-data", root / "dedicated-data")):
+                with self.subTest(setting=setting):
+                    environment.insert("GO_ANTIGRAVITY_DATA_DIR", setting)
+                    self.assertEqual(runtime.backend_data_directory(root, environment), expected.resolve())
+                    self.assertFalse(expected.exists())
 
 
 class BackendProcessIdentityTests(unittest.TestCase):
     def test_same_executable_mobile_and_other_project_are_excluded(self):
         root = Path(tempfile.gettempdir()) / "easyag-synthetic-project"
-        executable = str(root / "easyag-node.exe")
-        for script in (root / "backend/mobile/server.mjs", root / "backend/mobile/tunnel.mjs",
-                       root.parent / "other/backend/server.js"):
-            with self.subTest(script=script):
+        for executable, script in (("node.exe", root / "backend/mobile/server.mjs"),
+                                   ("node.exe", root / "backend/mobile/tunnel.mjs"),
+                                   ("node.exe", root.parent / "other/backend/server.js"),
+                                   ("easyag-node.exe", root / "backend/server.js")):
+            with self.subTest(executable=executable, script=script):
                 self.assertFalse(runtime.is_project_backend_process(root, {
                     "executable": executable, "commandLine": f'"{executable}" "{script}"'}))
 
@@ -248,16 +257,21 @@ class BackendProcessIdentityTests(unittest.TestCase):
     def test_selected_or_system_node_passes_to_child(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            selected = root / "selected.exe"
+            selected = root / "node.exe"
             selected.touch()
+            obsolete = root / "easyag-node.exe"
+            obsolete.touch()
             environment = runtime.QProcessEnvironment()
-            environment.insert("EASYAG_NODE_EXE", str(selected))
-            self.assertEqual(runtime.backend_node_executable(root, environment), selected.resolve())
-            environment.remove("EASYAG_NODE_EXE")
+            environment.insert("EASYAG_NODE_EXE", str(obsolete))
+            environment.insert("GO_ANTIGRAVITY_NODE_EXE", str(selected))
+            self.assertEqual(runtime.backend_node_executable(environment), selected.resolve())
+            environment.remove("GO_ANTIGRAVITY_NODE_EXE")
             with patch.object(runtime.QStandardPaths, "findExecutable", return_value=str(selected)):
-                self.assertEqual(runtime.backend_node_executable(root, environment), selected.resolve())
-            environment.insert("EASYAG_NODE_EXE", str(root / "missing.exe"))
-            self.assertIsNone(runtime.backend_node_executable(root, environment))
+                self.assertEqual(runtime.backend_node_executable(environment), selected.resolve())
+            with patch.object(runtime.QStandardPaths, "findExecutable", return_value=""):
+                self.assertIsNone(runtime.backend_node_executable(environment))
+            environment.insert("GO_ANTIGRAVITY_NODE_EXE", str(obsolete))
+            self.assertIsNone(runtime.backend_node_executable(environment))
 
 
 class TemporaryOwnershipTests(unittest.TestCase):

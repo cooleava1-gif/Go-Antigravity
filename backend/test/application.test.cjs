@@ -416,6 +416,44 @@ test('explicit prompt apply records v2 consent while a context-only apply leaves
   } });
 });
 
+test('real app redacts custom prompt text from status while exposing kernel metadata', async () => {
+  const text = '本地自定义核心指令全文：核验后汇报';
+  await withRealApp(async app => {
+    app.settings.update({ promptTier: 'custom', customSystemPrompt: text });
+    const status = app.status();
+    assert.ok(!Object.hasOwn(status, 'customSystemPrompt'));
+    assert.ok(!Object.hasOwn(status, 'customPromptUpdatedAt'));
+    assert.strictEqual(JSON.stringify(status).includes(text), false);
+    const kernel = app.kernelStatus();
+    assert.ok(kernel.customPrompt && typeof kernel.customPrompt === 'object');
+    assert.strictEqual(kernel.customPrompt.available, true);
+    assert.strictEqual(kernel.customPrompt.capacity, 3960);
+    assert.strictEqual(kernel.customPrompt.bytes, Buffer.byteLength(text, 'utf8'));
+    assert.strictEqual(kernel.desired.promptTier, 'custom');
+    assert.strictEqual(typeof kernel.desired.customHash, 'string');
+    assert.strictEqual(JSON.stringify(kernel).includes(text), false);
+  }, { kernelInspector: () => ({ platformSupported: true, targets: [] }) });
+});
+
+test('custom apply persists text, honors saved-text fallback, and clearCustomPrompt clears it', async () => {
+  const text = '本地自定义核心指令全文：核验后汇报';
+  const calls = [];
+  await withRealApp(async app => {
+    await app.applyKernel({ promptTier: 'custom', promptText: text });
+    assert.strictEqual(app.settings.get().promptTier, 'custom');
+    assert.strictEqual(app.settings.get().customSystemPrompt, text);
+    assert.ok(app.settings.get().customPromptUpdatedAt > 0);
+    assert.strictEqual(app.settings.get().promptPayloadVersion, 2);
+    await app.applyKernel({ promptTier: 'custom' });
+    assert.strictEqual(app.settings.get().customSystemPrompt, text, 'saved text survives an apply without promptText');
+    await app.applyKernel({ promptTier: 'stock', clearCustomPrompt: true });
+    assert.strictEqual(app.settings.get().customSystemPrompt, '');
+    assert.strictEqual(app.settings.get().customPromptUpdatedAt, 0);
+  }, { kernelInspector: () => inspectedDesktop('stock'), kernelPatcher: async input => {
+    calls.push(input); return { ok: true, logs: [], errors: [], promptTier: input.promptTier ?? null, contextMode: input.contextMode ?? null };
+  } });
+});
+
 test('empty or omitted kernel apply never supplies implicit prompt migration consent', async t => {
   for (const [label, input] of [['empty', {}], ['omitted', undefined]]) {
     await t.test(label, async () => {

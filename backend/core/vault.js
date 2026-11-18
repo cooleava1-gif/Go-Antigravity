@@ -4,13 +4,13 @@
 // - 每次存取都调用 PowerShell 走 DPAPI 太慢（一次 ~500ms，刷配额时会连着写好几回），
 //   所以用「DPAPI 保护的主密钥 + AES-256-GCM」：主密钥只在启动时读一次，
 //   之后加解密是纯 Node 同步调用。
-// - 主密钥存在 Windows 凭据管理器（`easyag:accounts-key`），它本身由 DPAPI 按当前
+// - 主密钥存在 Windows 凭据管理器（`go-antigravity:accounts-key`），它本身由 DPAPI 按当前
 //   用户加密，因此 accounts.json 被拷到别的机器/别的 Windows 用户下都解不开。
 // - 读不到主密钥时（非 Windows、PowerShell 故障）不阻塞使用：退回明文模式并明确告警。
 const crypto = require('node:crypto');
 
 const PREFIX = 'enc:v1:';
-const KEY_TARGET = 'easyag:accounts-key';
+const KEY_TARGET = 'go-antigravity:accounts-key';
 const KEY_BYTES = 32;
 const IV_BYTES = 12;
 
