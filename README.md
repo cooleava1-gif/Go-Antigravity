@@ -2,6 +2,12 @@
 
 Go-Antigravity 是独立维护的 Windows 桌面工具。Python / PyQt6 提供原生界面，Node.js 后端随源码在本机启动，无需连接 EasyAntigravity 的旧运行时或更新服务。引用和改编的材料仍按 [第三方声明](backend/THIRD-PARTY-NOTICES.md) 保留来源及许可信息。
 
+## 以后从哪里继续
+
+唯一的开发源目录是当前项目根目录：`C:\Users\97218\tools\EasyAntigravity-public`。以后修改功能、界面、内核补丁或发布流程，都在这里编辑并提交；不要在 `dist/`、`runtime/`、`.venv-qt/`、`backend/node_modules/` 或发布包解压目录里改代码。
+
+先看 [DEVELOPMENT.md](DEVELOPMENT.md) 了解目录分工和日常命令。根目录的 `Go-Antigravity.exe` 只是由 `desktop-qt/build-launcher.ps1` 生成的启动入口，真正的功能代码在 `desktop-qt/` 和 `backend/`。
+
 ## 从源码启动
 
 安装 **Python 3.10 或以上**，以及 **Node.js 22 或以上（含 npm）**，然后在项目根目录运行：
