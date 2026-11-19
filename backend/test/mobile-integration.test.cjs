@@ -12,7 +12,7 @@ const TOKEN = 'mobile-integration-boot-token';
 function request(port, route, { method = 'GET', body, token = TOKEN, origin } = {}) {
   return new Promise((resolve, reject) => {
     const headers = { 'Content-Type': 'application/json' };
-    if (token) headers['X-EasyAG-Token'] = token;
+    if (token) headers['X-Goagy-Token'] = token;
     if (origin) headers.Origin = origin;
     const req = http.request({ host: '127.0.0.1', port, path: route, method, headers }, res => {
       let text = ''; res.setEncoding('utf8');
@@ -65,7 +65,7 @@ test('malformed mobile bodies cannot leak a PIN through API logs', async () => {
   });
 });
 test('mobile autostart is opt-in, persists, and does not persist PIN', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'easyag-mobile-settings-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'goagy-mobile-settings-'));
   try { const file = path.join(dir, 'settings.json'); const settings = createSettings(file);
     assert.equal(settings.get().mobileAutoStart, false); settings.update({ mobileAutoStart: true, pin: '12345678' });
     assert.equal(createSettings(file).get().mobileAutoStart, true); assert.equal(fs.readFileSync(file, 'utf8').includes('12345678'), false);
@@ -73,7 +73,7 @@ test('mobile autostart is opt-in, persists, and does not persist PIN', () => {
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 test('real application exposes protected mobile API and test mode starts no child', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'easyag-mobile-app-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'goagy-mobile-app-'));
   const app = await createApplication({ rootDir: path.join(__dirname, '..'), dataDir: dir, testMode: true });
   try {
     assert.equal(typeof app.configureMobile, 'function'); assert.equal(typeof app.mobile.close, 'function');

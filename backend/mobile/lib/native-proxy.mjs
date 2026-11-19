@@ -48,7 +48,7 @@ function upstreamHeaders(req, base, token, websocket = false) {
  headers['accept-encoding'] = 'identity';
  // Pocket credentials belong to this gateway, never to the native upstream.
  if (headers.cookie) {
-  const cookies = headers.cookie.split(';').filter(value => !value.trim().startsWith('agy_pocket_session='));
+  const cookies = headers.cookie.split(';').filter(value => !value.trim().startsWith('goagy_pocket_session='));
   if (cookies.length) headers.cookie = cookies.join(';');
   else delete headers.cookie;
  }

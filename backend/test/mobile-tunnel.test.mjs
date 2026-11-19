@@ -91,9 +91,9 @@ test('native public deadline includes DNS/TLS and Stop destroys a pending reques
   controller.abort(); assert.equal(await pending, false); assert.equal(calls[1].destroyed, true);
 });
 test('both connector modes remove all proxy spellings while fixed credentials stay isolated', () => {
-  const env = { PATH: 'bin', HTTP_PROXY: 'secret', https_proxy: 'secret', ALL_PROXY: 'secret', No_Proxy: 'secret', TUNNEL_TOKEN: 'named', AGY_POCKET_PIN: '12345678' };
-  assert.deepEqual(cloudflaredEnvironment(env, 'quick'), { PATH: 'bin', AGY_POCKET_PIN: '12345678' });
-  assert.deepEqual(cloudflaredEnvironment(env, 'fixed'), { PATH: 'bin', TUNNEL_TOKEN: 'named', AGY_POCKET_PIN: '12345678' });
+  const env = { PATH: 'bin', HTTP_PROXY: 'secret', https_proxy: 'secret', ALL_PROXY: 'secret', No_Proxy: 'secret', TUNNEL_TOKEN: 'named', GOAGY_POCKET_PIN: '12345678' };
+  assert.deepEqual(cloudflaredEnvironment(env, 'quick'), { PATH: 'bin', GOAGY_POCKET_PIN: '12345678' });
+  assert.deepEqual(cloudflaredEnvironment(env, 'fixed'), { PATH: 'bin', TUNNEL_TOKEN: 'named', GOAGY_POCKET_PIN: '12345678' });
   assert.equal(env.HTTP_PROXY, 'secret');
 });
 test('HTTP2 healthy cold start has no fallback wait and URL chunks trigger readiness immediately', async t => {
@@ -185,15 +185,15 @@ test('synchronous replacement spawn failures settle promptly under the same cumu
 });
 test('named token precedes external YAML and only connector environment contains it across recovery', async t => {
   const token = 'synthetic-cloudflare-token-12345';
-  const env = { AGY_POCKET_MODE: 'fixed', AGY_POCKET_FIXED_URL: 'https://mobile.example.test', AGY_POCKET_PIN: '12345678',
-    TUNNEL_TOKEN: token, CF_TUNNEL_TOKEN: 'inherited-other', AGY_POCKET_CF_CONFIG: 'invalid-relative-config.yml', HTTPS_PROXY: 'private-proxy' };
+  const env = { GOAGY_POCKET_MODE: 'fixed', GOAGY_POCKET_FIXED_URL: 'https://mobile.example.test', GOAGY_POCKET_PIN: '12345678',
+    TUNNEL_TOKEN: token, CF_TUNNEL_TOKEN: 'inherited-other', GOAGY_POCKET_CF_CONFIG: 'invalid-relative-config.yml', HTTPS_PROXY: 'private-proxy' };
   const options = parseRuntimeOptions(env); assert.equal(options.auth, 'token'); assert.equal(options.config, null);
   const args = buildCloudflaredArgs(options); assert.equal(args.at(-1), 'run'); assert.ok(args.every(value => typeof value === 'string')); assert.equal(args.includes(token), false);
   let configReads = 0;
   const f = fixture({ env, checkConfig: async () => { configReads++; throw Error(token); } }); t.after(() => f.supervisor.stop());
   await f.begin(); await f.pending; assert.equal(configReads, 0);
   const origin = f.calls[0].options.env;
-  for (const key of ['TUNNEL_TOKEN', 'CF_TUNNEL_TOKEN', 'AGY_POCKET_CF_CONFIG']) assert.equal(origin[key], undefined);
+  for (const key of ['TUNNEL_TOKEN', 'CF_TUNNEL_TOKEN', 'GOAGY_POCKET_CF_CONFIG']) assert.equal(origin[key], undefined);
   assert.equal(f.calls[1].options.env.TUNNEL_TOKEN, token); assert.equal(f.calls[1].options.env.CF_TUNNEL_TOKEN, undefined);
   assert.equal(f.calls[1].options.env.HTTPS_PROXY, undefined);
   f.edge = false; await until(() => f.children.length === 3); f.edge = true;
@@ -203,7 +203,7 @@ test('named token precedes external YAML and only connector environment contains
 });
 test('invalid named token fails before origin spawn with a sanitized protocol error', async () => {
   for (const token of ['bad token', 'token\n', 'token;command', 'x'.repeat(16385)]) {
-    const f = fixture({ env: { AGY_POCKET_MODE: 'fixed', AGY_POCKET_FIXED_URL: 'https://mobile.example.test', TUNNEL_TOKEN: token } });
+    const f = fixture({ env: { GOAGY_POCKET_MODE: 'fixed', GOAGY_POCKET_FIXED_URL: 'https://mobile.example.test', TUNNEL_TOKEN: token } });
     await assert.rejects(f.supervisor.start(), /FIXED_CONFIG_REQUIRED/); await f.supervisor.done;
     assert.equal(f.calls.length, 0); assert.deepEqual(f.records, [{ error: 'FIXED_CONFIG_REQUIRED' }]);
   }

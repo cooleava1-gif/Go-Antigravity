@@ -73,7 +73,7 @@ def is_project_backend_process(root: Path, process: dict[str, Any]) -> bool:
 
 def _temporary_prefix(root: Path) -> str:
     key = hashlib.sha256(str(Path(root).resolve()).casefold().encode("utf-8")).hexdigest()[:16]
-    return f"easyag-qt-{key}-"
+    return f"goagy-qt-{key}-"
 
 
 def _process_is_running(pid: int) -> bool:
@@ -316,7 +316,7 @@ class BackendRuntime(QObject):
     def _get(self, url: str, callback: Callable[[int, bytes], None], token: str = "") -> None:
         request = local_request(url)
         if token:
-            request.setRawHeader(b"X-EasyAG-Token", token.encode("ascii"))
+            request.setRawHeader(b"X-Goagy-Token", token.encode("ascii"))
         reply = self._network.get(request)
         self._replies.add(reply)
         timer = QTimer(reply)

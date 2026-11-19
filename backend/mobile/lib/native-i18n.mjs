@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 
-export const NATIVE_I18N_PATH = '/__agy-pocket/zh-cn.js';
+export const NATIVE_I18N_PATH = '/__goagy-pocket/zh-cn.js';
 
 const nativeLabels = {
   'Start Voice mode': '启动语音模式',
@@ -11,11 +11,11 @@ const nativeLabels = {
   'Unavailable': '不可用'
 };
 
-// Dictionary order follows EasyAntigravity/backend/features/i18n.js.
+// Dictionary order follows the desktop i18n contract.
 function loadDictionary() {
   const dictionary = Object.create(null);
   for (const name of ['ui_v2.json', 'common.json']) {
-    const source = JSON.parse(readFileSync(new URL('../vendor/easy-antigravity/' + name, import.meta.url), 'utf8'));
+    const source = JSON.parse(readFileSync(new URL('../vendor/upstream-i18n/' + name, import.meta.url), 'utf8'));
     if (!source || typeof source !== 'object' || Array.isArray(source)) continue;
     for (const [key, value] of Object.entries(source)) {
       if (!key || key.trim() !== key || key.length > 2000 || typeof value !== 'string' || !value || value.length > 2000) continue;
@@ -26,11 +26,11 @@ function loadDictionary() {
   return Object.assign(dictionary, nativeLabels);
 }
 
-// Adapted from EasyAntigravity's MIT-licensed installI18n; see vendor provenance.
+// Adapted from the bundled upstream MIT-licensed installI18n implementation; see vendor provenance.
 // Serialized as an external browser asset: no Node globals, tokens or requests.
 function installChineseLocalization(dictionary) {
   'use strict';
-  const runtimeKey = '__agyPocketChineseLocalization';
+  const runtimeKey = '__goagyPocketChineseLocalization';
   if (window[runtimeKey]) return;
   const attributes = ['placeholder', 'title', 'aria-label', 'data-placeholder'];
   const actualMessage = '[data-testid=user-message-content],[data-testid=planner-response-text],[data-quotable=true],[data-markdown-root]';

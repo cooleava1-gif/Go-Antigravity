@@ -1,5 +1,4 @@
-// Process/socket parsers adapted from Antigrative Dashboard (MIT).
-// Copyright (c) 2026 AG Pulse contributors. See THIRD-PARTY-NOTICES.md.
+// Local process and socket parsing adapted for the desktop discovery contract.
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const fs = require('node:fs/promises');

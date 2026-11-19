@@ -12,7 +12,7 @@ function normalizePath(value) {
 }
 
 function discoverDesktop() {
-  const explicit = normalizePath(process.env.EASYAG_AG_EXE);
+  const explicit = normalizePath(process.env.GOAGY_AG_EXE);
   if (explicit) return { appDir: path.dirname(explicit), appExe: explicit, appName: 'Antigravity' };
   if (process.platform === 'darwin') {
     const candidates = ['/Applications/Antigravity.app', path.join(os.homedir(), 'Applications/Antigravity.app')];

@@ -11,7 +11,7 @@ const { createSettings } = require('../core/settings');
 const { writeJson } = require('../core/storage');
 const TOKEN = 'synthetic-cloudflare-token-12345';
 const NEXT = 'synthetic-cloudflare-replacement-67890';
-const EVIDENCE = process.env.EASYAG_TEST_EVIDENCE_ROOT || path.join(os.tmpdir(), 'easyag-enhancements-20261118');
+const EVIDENCE = process.env.TEST_EVIDENCE_ROOT || path.join(os.tmpdir(), 'goagy-enhancements-20261118');
 function directory(t) {
   fs.mkdirSync(EVIDENCE, { recursive: true });
   const dir = fs.mkdtempSync(path.join(EVIDENCE, 'named-token-fixture-'));

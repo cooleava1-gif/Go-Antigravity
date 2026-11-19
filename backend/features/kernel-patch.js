@@ -199,11 +199,11 @@ function localAppDataDir() {
   return process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
 }
 
-// Kept as a function (not a constant) so tests and the EASYAG_AG_EXE override both work, and so a
+// Kept as a function (not a constant) so tests and the GOAGY_AG_EXE override both work, and so a
 // relocated AG installation is picked up without editing this file.
 function resolveTargets(env = process.env) {
   const local = localAppDataDir();
-  const explicit = env.EASYAG_AG_EXE ? path.resolve(env.EASYAG_AG_EXE) : null;
+  const explicit = env.GOAGY_AG_EXE ? path.resolve(env.GOAGY_AG_EXE) : null;
   const appDir = explicit ? path.dirname(explicit) : path.join(local, 'Programs', 'antigravity');
   return [
     {
@@ -433,7 +433,7 @@ function detectPromptState(slots, buffer) {
   const rewritten = CORE_SLOTS.some(name => {
     const slot = slots.get(name);
     const text = buffer.toString('utf8', slot.dataOffset, slot.dataOffset + slot.dataLength);
-    return text.includes(PAD_OPEN) || text.startsWith('GO-ANTIGRAVITY:CUSTOM:') || text.startsWith('EasyAG ') || [1, payloads.version].some(version =>
+    return text.includes(PAD_OPEN) || text.startsWith('GO-ANTIGRAVITY:CUSTOM:') || text.startsWith('Goagy ') || [1, payloads.version].some(version =>
       ['3', '4'].some(tier => text.startsWith(payloadFor(tier, name, version).slice(0, 40))));
   });
   if (rewritten) return state('unknown');
@@ -579,7 +579,7 @@ function applyContextPatch(buffer, backup, mode) {
 
 // Config and binary changes share a staged transaction. A stable sidecar records this tool's
 // contextWindow ownership; restoration never overwrites unrelated, later user edits.
-const CONTEXT_STATE_SUFFIX = '.easyag-context.json';
+const CONTEXT_STATE_SUFFIX = '.goagy-context.json';
 let kernelTransactionActive = false;
 
 function readOptional(file) {
@@ -715,7 +715,7 @@ function prepareContextConfig(mode, homeDir) {
 
 function stageSnapshot(entry, key, bytes) {
   if (bytes === null) return;
-  const temp = entry.file + '.easyag-' + randomUUID() + '.tmp';
+  const temp = entry.file + '.goagy-' + randomUUID() + '.tmp';
   entry[key] = temp; // Register before writing so partial/failed stages are cleaned too.
   const mode = entry.before === null ? 0o600 : fs.statSync(entry.file).mode & 0o777;
   fs.writeFileSync(temp, bytes, { flag: 'wx', mode });

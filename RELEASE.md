@@ -6,7 +6,7 @@
 
 独立版从源码启动本机后端，不加载在线更新、旧覆盖层、旧窗口宿主或旧 Node 运行时。账户/设置/日志与旧版隔离，Qt 拒绝复用不匹配的后端。Node 后端包是私有实现，不发布到 npm。测试使用合成账户与临时目录，不代表真实 Google 账户、实际 Antigravity 网络或 cloudflared 公网端到端已验证。
 
-当前内核补丁已改为仓库内独立实现，不加载或打包 agy-tool；历史参考、支持的二进制观察和实际依赖边界见 [第三方声明](backend/THIRD-PARTY-NOTICES.md)。公开分发前仍需核对实际 Antigravity 文件、运行时和其他依赖的许可条件。
+当前内核补丁已改为仓库内独立实现，不加载或打包外部补丁工具；历史参考、支持的二进制观察和实际依赖边界见 [第三方声明](backend/THIRD-PARTY-NOTICES.md)。公开分发前仍需核对实际 Antigravity 文件、运行时和其他依赖的许可条件。
 
 现有独立历史的根提交包含早期版本的内核补丁。若要公开分发，应从当前复核通过的源码另建发布目录和新的 Git 历史；只关闭功能或隐藏界面入口，不能清除旧提交中的代码。
 
@@ -36,7 +36,7 @@ git archive --format=zip --output=../Go-Antigravity-source.zip HEAD
 
 ## 干净环境验证
 
-运行条件为 Windows、Python 3.10+、Node.js 22+（含 npm）；首次安装需要联网。依赖版本由 backend/package-lock.json 和 desktop-qt/requirements.txt 锁定。验证请在不含个人账户或凭据的临时目录执行。首次启动选择系统 Node，不回退旧 `easyag-node.exe`。发布验证只连接公共包仓库安装测试依赖，不启动真实账户、客户端或公网远程。
+运行条件为 Windows、Python 3.10+、Node.js 22+（含 npm）；首次安装需要联网。依赖版本由 backend/package-lock.json 和 desktop-qt/requirements.txt 锁定。验证请在不含个人账户或凭据的临时目录执行。首次启动选择系统 Node，不回退旧式便携运行时。发布验证只连接公共包仓库安装测试依赖，不启动真实账户、客户端或公网远程。
 
 ~~~powershell
 npm --prefix backend ci

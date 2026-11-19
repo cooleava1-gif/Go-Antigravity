@@ -6,7 +6,7 @@ const path = require('node:path');
 const { createSourceGuard, newestSourceMtime } = require('../features/source-guard');
 
 function tempRoot() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'easyag-guard-test-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'goagy-guard-test-'));
   test.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* windows lock */ } });
   for (const name of ['core', 'ui']) fs.mkdirSync(path.join(dir, name), { recursive: true });
   fs.writeFileSync(path.join(dir, 'core', 'a.js'), 'module.exports = 1;');

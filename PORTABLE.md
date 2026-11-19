@@ -2,7 +2,7 @@
 
 ## 运行环境
 
-源码分发需 Python 3.10+、Node.js 22+（含 npm）。运行 `Start-Go-Antigravity.cmd`，脚本按锁定清单准备 Python 和后端依赖；首次安装需要联网。从 `PATH` 使用已安装的 `node.exe`，不会选用旧式便携运行时 `easyag-node.exe`。
+源码分发需 Python 3.10+、Node.js 22+（含 npm）。运行 `Start-Go-Antigravity.cmd`，脚本按锁定清单准备 Python 和后端依赖；首次安装需要联网。从 `PATH` 使用已安装的 `node.exe`，不会选用旧式便携运行时。
 
 GitHub 发布包由 `scripts/package-windows.ps1` 生成，目录包含 `Go-Antigravity.exe`、应用源文件、生产 `node_modules`、`runtime/node/node.exe` 和 `runtime/python/`。发布包不需要用户安装 Python、Node.js 或执行 npm/pip；`runtime/manifest.json` 记录构建提交和运行时版本。这个包仍然是目录型发布，不是单文件 EXE。不要把开发目录中的 `.venv-qt`、`backend/node_modules` 或用户数据直接复制到发布包。
 
@@ -16,7 +16,7 @@ GitHub 发布包由 `scripts/package-windows.ps1` 生成，目录包含 `Go-Anti
 
 ## 数据与备份
 
-源码模式默认只使用项目根目录的 `.go-antigravity-data/`。发布包模式默认使用 `%LOCALAPPDATA%\Go-Antigravity`，避免向可能只读的安装目录写入。两种模式都可用 `GO_ANTIGRAVITY_DATA_DIR` 指向专用目录；相对值从项目根目录解析。不要让不同检出目录同时使用同一个数据目录，也不要指向旧版账户库。独立版使用 Windows 凭据管理器中的 `go-antigravity:accounts-key`。不会读取或迁移旧 `EASYAG_DATA_DIR`、旧应用目录或 `easyag:accounts-key`；首次使用时按需重新设置，不需要删除原数据。
+源码模式默认只使用项目根目录的 `.go-antigravity-data/`。发布包模式默认使用 `%LOCALAPPDATA%\Go-Antigravity`，避免向可能只读的安装目录写入。两种模式都可用 `GO_ANTIGRAVITY_DATA_DIR` 指向专用目录；相对值从项目根目录解析。不要让不同检出目录同时使用同一个数据目录，也不要指向旧版账户库。独立版使用 Windows 凭据管理器中的 `go-antigravity:accounts-key`。不会读取或迁移旧版账户、旧应用目录或旧凭据；首次使用时按需重新设置，不需要删除原数据。
 
 账户自动备份只在解析修复、格式迁移等需要覆盖原文件前创建，保留最近 5 份。备份失败会中止恢复写入，不覆盖原文；普通启动与配额刷新不会每次额外创建备份。备份可能含敏感数据，应按真实账户文件保护。
 

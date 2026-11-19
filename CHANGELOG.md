@@ -1,6 +1,6 @@
 # Go-Antigravity 更新日志
 
-历史条目保留用于追溯来源；其中仍出现的 EasyAntigravity 名称、旧档位和旧启动行为不代表当前版本。当前行为以 [README](README.md)、[开发指引](DEVELOPMENT.md) 和 [发布说明](RELEASE.md) 为准。
+历史条目保留用于追溯来源；其中仍出现的 Go-Antigravity 名称、旧档位和旧启动行为不代表当前版本。当前行为以 [README](README.md)、[开发指引](DEVELOPMENT.md) 和 [发布说明](RELEASE.md) 为准。
 
 ## 未发布：统计精简与源码发布审查（2026-11-18）
 
@@ -40,7 +40,7 @@
 - **900K / 1M**：跳过封顶判断，释放 983,040 token 物理窗口；
 - **官方默认**：还原 256K / 128K。
 
-AG 内原有的上下文圆环跟着变：`ContextMonitor` 用解锁后的上限覆盖内核上报的 `maxContextTokens`，否则环永远按 256K 画，百分比是假的。**没有新增任何注入到 AG 输入框的组件**——EasyAG 原有的圆环长什么样，现在还是什么样。
+AG 内原有的上下文圆环跟着变：`ContextMonitor` 用解锁后的上限覆盖内核上报的 `maxContextTokens`，否则环永远按 256K 画，百分比是假的。**没有新增任何注入到 AG 输入框的组件**——Goagy 原有的圆环长什么样，现在还是什么样。
 
 ### 🛡 安全设计
 1. **首次修改前自动创建 `.bak`**，之后所有补丁都以备份的字节偏移为锚，不受当前文件状态影响；
@@ -55,7 +55,7 @@ AG 内原有的上下文圆环跟着变：`ContextMonitor` 用解锁后的上限
 ### 🧪 测试
 新增 39 项，合计 **125 个**（`npm run test:core` 114 个）：`kernel-patch.test.cjs`（20 项，用合成 PE64 + embed.FS 镜像覆盖档位检测/幂等/回滚/容量上限/identity 校验/备份版本校验，不碰真实内核）、`settings.test.cjs`（5 项，出厂默认值/旧设置升级/不覆盖用户选择/损坏回落）、`kernel-panel.test.mjs`（6 项）、`session.test.cjs`（5 项，补丁钩子的时序与失败中止）、`api.test.cjs`（+3 项路由）。
 
-> ⚠️ **需要手动处理**：本次为验证补丁流程，曾在本机 `language_server.exe` 上应用过 4 档 + 900K 并已完整还原（还原后与原始字节逐字节一致，`.bak` 已删除）。当前出厂默认是 **4 档 + 512K**，第一次通过 EasyAG 启动 AG 时会自动应用并创建 `.bak` 备份；若想保持官方原版，进启动器把两个档位都设成「官方默认」并关掉自动同步即可。
+> ⚠️ **需要手动处理**：本次为验证补丁流程，曾在本机 `language_server.exe` 上应用过 4 档 + 900K 并已完整还原（还原后与原始字节逐字节一致，`.bak` 已删除）。当前出厂默认是 **4 档 + 512K**，第一次通过 Goagy 启动 AG 时会自动应用并创建 `.bak` 备份；若想保持官方原版，进启动器把两个档位都设成「官方默认」并关掉自动同步即可。
 
 ## 未发布：启动前代理出口自检（2026-11-11）
 
@@ -114,7 +114,7 @@ AG 内原有的上下文圆环跟着变：`ContextMonitor` 用解锁后的上限
 
 1. **诊断**（`tag-alert`）：`AG 的模型请求被 Google 地域闸门拒绝（HTTP 400 · User location is not supported for the API use）`
 2. **当前出口**（`tag-warn`）：`当前代理出口 198.51.100.7 · 美国 · Los Angeles · AS64496 EXAMPLE CLOUD LLC（经 127.0.0.1:7890）`——换节点后这一行就是验证修复是否生效的最快方式。
-3. **建议**（`tag-warn`）：换节点到受支持地区，并明确「这与 EasyAG 无关，也不需要重装」。
+3. **建议**（`tag-warn`）：换节点到受支持地区，并明确「这与 Goagy 无关，也不需要重装」。
 
 设计上的几个刻意的选择：
 - **只报一次，冷却 60 秒**。一次失败的请求会让 AG 连打三行同样的错（实测 18:24:59 / 18:25:02 / 18:25:04），不冷却就会连弹三遍。
@@ -150,12 +150,12 @@ AG 内原有的上下文圆环跟着变：`ContextMonitor` 用解锁后的上限
 
 ### 🔐 令牌落盘加密（DPAPI + AES-256-GCM）
 - `accounts.json` 里的 `refresh_token` / `access_token` 不再是明文：落盘前加密成 `enc:v1:<base64>`（AES-256-GCM，每次随机 IV），内存里仍是明文，切换与续期逻辑一行没改。
-- 主密钥 32 字节，存放在 **Windows 凭据管理器** `easyag:accounts-key`（本身由 DPAPI 按用户加密），只在启动时读一次。**不是**每次读写都调 PowerShell——否则刷一轮配额要多花十几秒。
+- 主密钥 32 字节，存放在 **Windows 凭据管理器** `go-antigravity:accounts-key`（本身由 DPAPI 按用户加密），只在启动时读一次。**不是**每次读写都调 PowerShell——否则刷一轮配额要多花十几秒。
 - 兼容与兜底：老账本首次加载自动加密升级（**不写明文备份**）；主密钥丢失/换机时账户**不会被丢弃**，而是标红「本地令牌无法解密」并提示重新授权；凭据管理器不可用（非 Windows、PowerShell 故障）时退回明文并明确告警，不阻塞使用。
-- 排查用：`EASYAG_PLAINTEXT_TOKENS=1` 只关闭"加密写入"，既有密文仍能正常读取。
+- 排查用：`GO_ANTIGRAVITY_PLAINTEXT_TOKENS=1` 只关闭"加密写入"，既有密文仍能正常读取。
 
 ### 🛡 本地接口加会话令牌
-- 后端每次启动生成 32 位随机令牌，内联进 `index.html`（`window.__EASYAG_TOKEN__`），所有 `/api/*` 必须带 `X-EasyAG-Token` 头（SSE 用 `?token=`，因为 EventSource 不能自定义头），否则 401「本地会话已失效」。
+- 后端每次启动生成 32 位随机令牌，内联进 `index.html`（`window.__GOAGY_TOKEN__`），所有 `/api/*` 必须带 `X-Goagy-Token` 头（SSE 用 `?token=`，因为 EventSource 不能自定义头），否则 401「本地会话已失效」。
 - 拦截的场景：别的网页/标签页对本地端口的跨站调用、上一次运行遗留的页面（令牌随重启失效）、随手脚本的无意触碰。
 - **诚实说明**：挡不住本机恶意进程——它同样能抓取页面 HTML 拿到令牌。真正的边界仍是"仅监听回环 + 同源检查"，这一层只是把门槛从"任何本地进程"抬到"愿意解析 HTML 的本地进程"。
 
@@ -175,17 +175,17 @@ AG 内原有的上下文圆环跟着变：`ContextMonitor` 用解锁后的上限
 ## 未发布：凭据不再进日志（2026-10-25）
 
 ### 🔐 修复：OAuth 密钥曾被写进日志与账本
-- **成因**：`curl.exe` 失败时，`child_process` 抛出的错误信息就是**整条命令行**；而续期请求把 `client_secret` 与 `refresh_token` 作为参数传入，于是「代理端口没开」这种常见故障会把两个密钥一起写进 `easyag.log` 和 `accounts.json` 的 `lastError`（卡片上也会显示）。
+- **成因**：`curl.exe` 失败时，`child_process` 抛出的错误信息就是**整条命令行**；而续期请求把 `client_secret` 与 `refresh_token` 作为参数传入，于是「代理端口没开」这种常见故障会把两个密钥一起写进 `goagy.log` 和 `accounts.json` 的 `lastError`（卡片上也会显示）。
 - **修复**：新增 `core/redact.js` 统一脱敏（`key=value`、JSON 字段、`Authorization: Bearer`、`GOCSPX-`、`ya29.`、`1//` 形态），在三个关口生效：`Events.log`（所有落盘与界面日志）、`accounts.markStatus` / `updateQuota`（持久化字段）、`agcred.http`（不再把原始命令行抛出）。
 - **报错改成能用的**：现在显示 `请求 oauth2.googleapis.com 失败：无法连接本地代理，请先启动代理客户端或改正端口（curl 退出码 7，经本地代理 127.0.0.1:7897）`，并按退出码附上 5/6/7/28/35/52/56 的解释。网络故障**不再**被误判为「令牌失效」。
 - **新增 `scripts/scrub-secrets.cjs`**：分享日志前先跑一遍，默认只报告、`--write` 才改写；已用它清理本机历史遗留的 2 处泄露。
 
 ### 🕒 日志可读性
 - 跨天日志现在带日期（`10-24 18:00:17`），不会再出现「11:05 排在 18:00 后面」的错觉。
-- 移除 `index.html` 里那条假的 `[SYSTEM] EasyAG 已就绪。`，换成「正在连接本地内核…」占位，真实日志到达后自动移除。
+- 移除 `index.html` 里那条假的 `[SYSTEM] Goagy 已就绪。`，换成「正在连接本地内核…」占位，真实日志到达后自动移除。
 
 ### ⚠️ 需要手动处理
-- 曾有一次 `refresh_token` 明文落进日志与账本（成因：`curl.exe` 失败时抛出的错误信息是整条命令行，而续期把密钥当参数传）。该令牌已建议用户在 Google 账号「安全性 → 第三方应用」撤销授权，并在 EasyAG 里对相应账户点「重新授权」。`client_secret` 是 AG 客户端内置的公开凭据（可从 `language_server.exe` 提取），风险较低。具体令牌片段已从本文件中抹去，不再公开留存。
+- 曾有一次 `refresh_token` 明文落进日志与账本（成因：`curl.exe` 失败时抛出的错误信息是整条命令行，而续期把密钥当参数传）。该令牌已建议用户在 Google 账号「安全性 → 第三方应用」撤销授权，并在 Goagy 里对相应账户点「重新授权」。`client_secret` 是 AG 客户端内置的公开凭据（可从 `language_server.exe` 提取），风险较低。具体令牌片段已从本文件中抹去，不再公开留存。
 
 ## 未发布：账户卡片与失效自愈（2026-10-24）
 
@@ -245,7 +245,7 @@ AG 内原有的上下文圆环跟着变：`ContextMonitor` 用解锁后的上限
 - 原生权限规则统一支持 Allow / Deny / Ask，执行交给 AG 自身。
 - 增强配置采用持久化事务记录；退出精确恢复原策略，保留用户后续修改和预先存在的规则。
 - 不再为了切换预设标签而扩大文件访问权限或关闭沙箱。
-- 移除 Hook 执行路径和安装工具，仅保留旧 EasyAG 注册的迁移清理。
+- 移除 Hook 执行路径和安装工具，仅保留旧 Goagy 注册的迁移清理。
 - CDP 断连与 AG 退出分开，补充请求响应、重连、预加载清理与 DOM 就绪处理。
 - 汉化测试改为验证实际注入脚本；发布资源使用白名单并验证独立运行。
 - 当前专注 AG 桌面端；上下文、额度、速度面板仍待接入。
@@ -271,7 +271,7 @@ AG 内原有的上下文圆环跟着变：`ContextMonitor` 用解锁后的上限
 ## v3.0.0 (2026-09-27)
 
 ### 🛡️ ARES 风险特征库（Agent Risk Execution Signatures）
-- **命名定稿**：原「病毒库 / EAS」对外统一为 **ARES（Agent Risk Execution Signatures）**；界面开关为「ARES 风险提示」，胶囊页脚 `EasyAG ARES`。
+- **命名定稿**：原「病毒库 / EAS」对外统一为 **ARES（Agent Risk Execution Signatures）**；界面开关为「ARES 风险提示」，胶囊页脚 `Goagy ARES`。
 - **权威源落库**：从 Atomic Red Team（T1485/T1490/T1070）、LOLBAS、GTFOBins、Sigma、Git Flight Rules、OWASP 收集提炼 **31 条** ARES 特征（`rules/feeds/ares-signatures.json`），并入 `signatures.json`（合计 **230** 条）。
 - **正负样本自检**：115 个 `test_cases` 全通过；覆盖卷影/备份销毁、ACL 夺权、diskpart 清盘、日志抹除、钥匙串、Gatekeeper 绕过、dd/mkfs、tar 检查点、内联解释器、Base64/管道执行、Git 灾难操作、Docker/K8s/Terraform/云存储销毁。
 - **防逃逸**：`git push -force`、`git clean -fdx` 不误伤 `-nd`、`git branch -D` 不误伤 `-d`、`mkfs -n` 干跑不报警。
@@ -283,7 +283,7 @@ AG 内原有的上下文圆环跟着变：`ContextMonitor` 用解锁后的上限
 ### 🧩 托盘与胶囊
 - 托盘对齐 Clash Party 风格：短标签、退出独立分组、`Ctrl+Q`。
 - 胶囊服务端定时 `hide_capsule` 兜底；Tauri 清理残留 Resident，避免双胶囊叠层。
-- `hide_easyag` 改发明文 `hide`，启动后面板可收起至托盘。
+- `hide_goagy` 改发明文 `hide`，启动后面板可收起至托盘。
 
 ### 🖥️ 控制台
 - SSE 立即打拍 + 启动回填 `/api/logs`，日志与风险计数一致。
@@ -292,21 +292,21 @@ AG 内原有的上下文圆环跟着变：`ContextMonitor` 用解锁后的上限
 ## v2.3.0 (2026-09-25)
 
 ### 🚀 灵动胶囊通知系统 (HUD Capsule)
-- **极简极速原生渲染组件**：全新内置 `EasyAG-Resident` 独立高能驻留模块（体积仅 19.5 KB，基于原生 WPF 硬件加速与 Win32 无焦点穿透技术），0 控制台闪烁，内存占用 <25MB。
+- **极简极速原生渲染组件**：全新内置 `Goagy-Resident` 独立高能驻留模块（体积仅 19.5 KB，基于原生 WPF 硬件加速与 Win32 无焦点穿透技术），0 控制台闪烁，内存占用 <25MB。
 - **三大行动里程碑闭环**：
   - 🚨 **命中危险命令**：珊瑚红（`#fb7185`）霓虹脉冲光晕，精确显示拦截的危险指令文本与阻断提示，提供 `[前往审查 ↵]` 直达按钮。
   - 💡 **等待方案决策**：薄荷青（`#00f5d4`）霓虹光晕，精准捕获业务多选/单选题干，提供 `[前往选择 ↵]` 直达按钮。
   - ✅ **本轮任务完成**：翡翠绿（`#10b981`）呼吸光晕，生成就绪后常驻提醒，提供 `[前往查看 ↵]` 直达按钮。
 - **常驻直至行动**：告别倒计时自动关闭导致的人工暂离漏看与任务无端卡死；右上角支持独立 `✕` 关闭按钮。
-- **无感直达，绝不弹窗打扰**：点击胶囊按钮直接唤醒并前置聚焦 Antigravity 窗口，并平滑平移至高危/问答卡片；EasyAG 控制面板全程静默驻留，不弹窗抢夺用户正在进行的键鼠操作。
+- **无感直达，绝不弹窗打扰**：点击胶囊按钮直接唤醒并前置聚焦 Antigravity 窗口，并平滑平移至高危/问答卡片；Goagy 控制面板全程静默驻留，不弹窗抢夺用户正在进行的键鼠操作。
 
 ### 📥 系统托盘常驻与后台静默 (Tray Daemon)
-- **启动自动静默**：用户在 EasyAG 面板完成代理/端口配置并点击「启动 Antigravity」后，主控制窗口自动隐藏退入系统托盘，全面转为静默守护模式。
+- **启动自动静默**：用户在 Goagy 面板完成代理/端口配置并点击「启动 Antigravity」后，主控制窗口自动隐藏退入系统托盘，全面转为静默守护模式。
 - **面板收起控制**：顶部状态栏新增 `[ 📥 托盘静默 ]` 快捷按钮，支持随时手动收起。
 - **系统托盘右键菜单**：
   - `🚀 打开控制面板`：双击或点击唤醒恢复主控制面板。
   - `🌐 浏览器控制台`：一键调出默认浏览器访问本地控制台。
-  - `🛑 退出 EasyAntigravity`：彻底安全退出后台守护与本地代理。
+  - `🛑 退出 Go-Antigravity`：彻底安全退出后台守护与本地代理。
 - **Tauri 窗口生命周期升级**：点击主窗口右上角 `✕` 默认隐藏到托盘而非杀死代理进程，保障开发代理链路不间断。
 
 ### 🤖 任务完成状态机监控 (CDP State Machine)
@@ -334,8 +334,8 @@ AG 内原有的上下文圆环跟着变：`ContextMonitor` 用解锁后的上限
 ## v2.2.0 (2026-09-22)
 
 ### 🍏 macOS (Apple Silicon / Intel) 正式分发与内核修复
-- **解决 Apple Silicon JIT 崩溃**：修复 M 系列（M1~M4）Mac 上 `easyag-node` 因 Hardened Runtime 缺失 JIT 权限在 V8 `ThreadIsolation::Initialize` 阶段直接触发 `SIGTRAP`（signal 5，退出码 133）的静默崩溃。通过 `Entitlements.plist` 注入 `com.apple.security.cs.allow-jit`、`allow-unsigned-executable-memory` 及 `disable-library-validation`。
-- **规范应用外壳打包**：修复 CI 发布包解压后直接裸露 `Contents/` 的问题，现已封装为标准的 `EasyAntigravity.app` 外壳，解压即用。
+- **解决 Apple Silicon JIT 崩溃**：修复 M 系列（M1~M4）Mac 上 `goagy-node` 因 Hardened Runtime 缺失 JIT 权限在 V8 `ThreadIsolation::Initialize` 阶段直接触发 `SIGTRAP`（signal 5，退出码 133）的静默崩溃。通过 `Entitlements.plist` 注入 `com.apple.security.cs.allow-jit`、`allow-unsigned-executable-memory` 及 `disable-library-validation`。
+- **规范应用外壳打包**：修复 CI 发布包解压后直接裸露 `Contents/` 的问题，现已封装为标准的 `Go-Antigravity.app` 外壳，解压即用。
 - **CI 自动化 JIT 冒烟校验**：在 GitHub Actions macOS 构建流水线中加入 Node V8 执行自检，阻断任何无权限二进制产物的发布。
 
 ### 🛡️ 高危拦截与自动放行生命周期闭环
@@ -385,8 +385,8 @@ AG 内原有的上下文圆环跟着变：`ContextMonitor` 用解锁后的上限
 
 ### 🎨 界面与窗口
 - **WebView2 原生窗口**：不再依赖 Edge 浏览器，使用系统 WebView2 Runtime
-- **自定义窗口**：标题栏显示 "EasyAntigravity"，带应用图标
-- **exe 图标**：打包 EasyAG logo
+- **自定义窗口**：标题栏显示 "Go-Antigravity"，带应用图标
+- **exe 图标**：打包 Goagy logo
 - **单实例保护**：重复启动时聚焦已有窗口
 
 ### 🐛 修复

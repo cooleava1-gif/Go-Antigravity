@@ -157,14 +157,14 @@ test('AG 自己退出时 onExit 收尾钩子运行', async () => {
   assert.equal(session.phase, 'idle');
 });
 
-test('用户关闭 AG 或退出 EasyAG 时 onExit 同样运行', async () => {
+test('用户关闭 AG 或退出 Goagy 时 onExit 同样运行', async () => {
   let stopped = 0;
   const { session } = makeSession({
     child: stubChild(),
     hooks: { onExit: () => { stopped += 1; } }
   });
   await session.launch();
-  await session.close('EasyAG 退出');
+  await session.close('Goagy 退出');
   assert.equal(stopped, 1);
 });
 
@@ -176,7 +176,7 @@ test('onExit 抛错不会阻塞关机，只留一条警告', async () => {
     hooks: { onExit: () => { throw new Error('句柄占用中'); } }
   });
   await session.launch();
-  const result = await session.close('EasyAG 退出');
+  const result = await session.close('Goagy 退出');
   assert.equal(result.ok, true, '收尾失败不能让关机卡住');
   assert.equal(session.phase, 'idle');
   const warning = events.logged.find(line => line.tag === 'tag-warn');

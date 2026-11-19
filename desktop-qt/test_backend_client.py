@@ -11,7 +11,7 @@ from backend_client import BackendClient
 
 
 _TOKEN = "0123456789abcdef0123456789abcdef"
-_BOOT_PAGE = f'<script>window.__EASYAG_TOKEN__="{_TOKEN}";</script>'.encode()
+_BOOT_PAGE = f'<script>window.__GOAGY_TOKEN__="{_TOKEN}";</script>'.encode()
 
 
 class SyntheticClient(BackendClient):

@@ -1,7 +1,6 @@
-// Local composer geometry checks adapted from Antigrative Dashboard (MIT).
-// Copyright (c) 2026 AG Pulse contributors. See THIRD-PARTY-NOTICES.md.
+// Local composer geometry checks adapted for the desktop context widget.
 function installContextWidget(win, doc, enabled, report) {
-  win.__easyagContext?.dispose();
+  win.__goagyContext?.dispose();
   if (!enabled) return;
   const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   let node, shadow, button, card, composer, data, route = '', pending, lastFetch = 0, sequence = 0, disposed = false;
@@ -109,7 +108,7 @@ function installContextWidget(win, doc, enabled, report) {
   }
   function createNode() {
     node = doc.createElement('span');
-    node.id = 'easyag-context-monitor';
+    node.id = 'goagy-context-monitor';
     node.style.cssText = 'display:flex;flex:0 1 auto;min-width:0;max-width:80px;margin:0 4px;position:relative;overflow:visible;';
     shadow = node.attachShadow({ mode: 'open' });
     shadow.innerHTML = `<style>
@@ -227,13 +226,13 @@ function installContextWidget(win, doc, enabled, report) {
   });
   observer.observe(doc.documentElement, { childList: true, subtree: true });
   const timer = win.setInterval(() => { mount(); refresh(); }, 1000);
-  win.__easyagContext = { receive, dispose() {
+  win.__goagyContext = { receive, dispose() {
     disposed = true; pending = null; data = null; hideCard(); node?.remove();
     win.clearInterval(timer); if (frame !== undefined) win.cancelAnimationFrame(frame);
     observer.disconnect(); resizeObserver?.disconnect();
     doc.removeEventListener('pointerdown', onPointer); doc.removeEventListener('keydown', onKey);
     doc.removeEventListener('scroll', schedule, true); win.removeEventListener('resize', schedule);
-    delete win.__easyagContext;
+    delete win.__goagyContext;
   } };
   mount(); refresh();
 }

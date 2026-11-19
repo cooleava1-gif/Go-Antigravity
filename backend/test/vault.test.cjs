@@ -92,8 +92,8 @@ test('密钥长度异常的凭据不会被覆盖', async () => {
 });
 
 test('production vault only addresses the independent release namespace', async () => {
-  const entries = new Map([['easyag:accounts-key', Buffer.alloc(32, 7).toString('base64')]]);
-  const legacyKey = entries.get('easyag:accounts-key');
+  const entries = new Map([['legacy:accounts-key', Buffer.alloc(32, 7).toString('base64')]]);
+  const legacyKey = entries.get('legacy:accounts-key');
   const calls = [];
   const agcred = { runScript: async (method, value, target) => {
     calls.push([method, target]);
@@ -107,5 +107,5 @@ test('production vault only addresses the independent release namespace', async 
     ['write', 'go-antigravity:accounts-key'],
     ['read', 'go-antigravity:accounts-key'],
   ]);
-  assert.equal(entries.get('easyag:accounts-key'), legacyKey);
+  assert.equal(entries.get('legacy:accounts-key'), legacyKey);
 });

@@ -20,7 +20,7 @@ const SCAN_CARRY = 1024;
 
 function languageServerCandidates() {
   const roots = [];
-  if (process.env.EASYAG_AG_EXE) roots.push(path.dirname(process.env.EASYAG_AG_EXE));
+  if (process.env.GOAGY_AG_EXE) roots.push(path.dirname(process.env.GOAGY_AG_EXE));
   if (process.env.LOCALAPPDATA) roots.push(path.join(process.env.LOCALAPPDATA, 'Programs/antigravity'));
   return roots.map(root => path.join(root, 'resources/bin/language_server.exe'));
 }
@@ -29,7 +29,7 @@ function languageServerCandidates() {
 // cockpit-tools and Orbit-style managers authorize with. Verified end to end: a token issued
 // to AG's other client (the one its login screen uses) is rejected with unauthorized_client,
 // and once that token's access token expires about an hour later AG falls back to its login
-// page. Authorizing with this client keeps every token EasyAG mints refreshable by AG itself.
+// page. Authorizing with this client keeps every token Goagy mints refreshable by AG itself.
 // Secret matching uses SHA-256 fingerprints so no plaintext secret lives in the repository.
 // Client ids are fingerprinted the same way. They are public identifiers rather than secrets,
 // but keeping them out of the source has two concrete payoffs: GitHub secret scanning has

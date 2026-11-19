@@ -28,7 +28,7 @@ function loadPatcher(fsOverrides = {}) {
 
 function setupPatchCase(t, buffer = buildKernel()) {
   const target = place(tempTarget(), buffer);
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'easyag-kernel-home-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'goagy-kernel-home-'));
   t.after(() => {
     fs.rmSync(target.dir, { recursive: true, force: true });
     fs.rmSync(home, { recursive: true, force: true });
@@ -144,7 +144,7 @@ function buildKernel() {
 }
 
 function tempTarget(name = 'language_server.exe') {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'easyag-kernel-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'goagy-kernel-'));
   return { dir, path: path.join(dir, 'bin', name), backupPath: path.join(dir, 'bin', `${name}.bak`) };
 }
 
@@ -159,7 +159,7 @@ function read(target) {
 }
 
 function withHome(run) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'easyag-home-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'goagy-home-'));
   try { return run(home); } finally { fs.rmSync(home, { recursive: true, force: true }); }
 }
 
@@ -181,9 +181,9 @@ test('tier and mode normalisation accepts the documented spellings and rejects j
   assert.strictEqual(CONTEXT_MODES.stock.tokens, 0);
 });
 
-test('resolveTargets honours EASYAG_AG_EXE for the desktop kernel', () => {
+test('resolveTargets honours GOAGY_AG_EXE for the desktop kernel', () => {
   const explicit = 'D:/portable/Antigravity/Antigravity.exe';
-  const targets = resolveTargets({ EASYAG_AG_EXE: explicit });
+  const targets = resolveTargets({ GOAGY_AG_EXE: explicit });
   assert.strictEqual(targets[0].path, 'D:/portable/Antigravity/resources/bin/language_server.exe'.replace(/\//g, path.sep));
   assert.strictEqual(targets[0].backupPath, targets[0].path + '.bak');
   assert.strictEqual(targets[1].id, 'ide');
@@ -386,7 +386,7 @@ test('balanced v2 rewrites only core slots and preserves every auxiliary templat
     assert.ok(buffer.subarray(slot.dataOffset, slot.dataOffset + slot.dataLength).equals(original.subarray(slot.dataOffset, slot.dataOffset + slot.dataLength)), name + ' preserved');
   }
   const guidelines = buffer.toString('utf8', slots.get('system_prompts/guidelines.tmpl').dataOffset, slots.get('system_prompts/guidelines.tmpl').dataOffset + slots.get('system_prompts/guidelines.tmpl').dataLength);
-  assert.ok(guidelines.startsWith('EasyAG balanced v2'));
+  assert.ok(guidelines.startsWith('Goagy balanced v2'));
   const style = buffer.toString('utf8', slots.get('system_prompts/communication_style.tmpl').dataOffset, slots.get('system_prompts/communication_style.tmpl').dataOffset + slots.get('system_prompts/communication_style.tmpl').dataLength);
   assert.ok(style.includes('Do not fabricate symbols'));
   assert.ok(buffer.toString('utf8', slots.get('system_prompts/identity.tmpl').dataOffset, slots.get('system_prompts/identity.tmpl').dataOffset + slots.get('system_prompts/identity.tmpl').dataLength).includes(IDENTITY_MARKER));
@@ -551,7 +551,7 @@ test('a backup from a different build is refused instead of corrupting the kerne
 });
 
 test('inspectKernel reports a missing kernel without throwing', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'easyag-inspect-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'goagy-inspect-'));
   try {
     const result = inspectKernel({ targets: [{ id: 'desktop', label: 'x', path: path.join(dir, 'nope.exe'), backupPath: path.join(dir, 'nope.exe.bak') }] });
     assert.strictEqual(result.targets[0].exists, false);
@@ -562,7 +562,7 @@ test('inspectKernel reports a missing kernel without throwing', () => {
 test('applyKernelPatch backs up once, patches, then reports a no-op second run', async () => {
   const target = place(tempTarget(), buildKernel());
   try {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'easyag-home-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'goagy-home-'));
     // Leave config directories for products the user never ran untouched.
     fs.mkdirSync(path.join(home, '.gemini', 'config'), { recursive: true });
     try {
@@ -812,7 +812,7 @@ function filesUnder(root) {
 
 function assertNoTransactionTemps(fixture) {
   for (const root of [fixture.home, fixture.target.dir]) {
-    assert.deepStrictEqual(filesUnder(root).filter(file => /\.easyag-.*\.tmp$|\.old_run$/.test(file)), []);
+    assert.deepStrictEqual(filesUnder(root).filter(file => /\.goagy-.*\.tmp$|\.old_run$/.test(file)), []);
   }
 }
 
@@ -828,7 +828,7 @@ test('config parse, shape, stage and silent-stage failures fail closed before an
       let attempts = 0;
       const patcher = loadPatcher({
         writeFileSync(file, ...args) {
-          if (String(file).startsWith(fixture.config + '.easyag-')) {
+          if (String(file).startsWith(fixture.config + '.goagy-')) {
             attempts++;
             if (failure === 'write-error') throw new Error('injected config stage failure');
             if (failure === 'silent-write') return;
@@ -869,7 +869,7 @@ test('second config stage/rename faults restore both exact JSON texts and the pr
         let stageWrites = 0, faults = 0;
         const patcher = loadPatcher({
           writeFileSync(file, bytes, ...args) {
-            if (failure === 'stage-partial' && String(file).startsWith(fixture.cliConfig + '.easyag-') && ++stageWrites === 2) {
+            if (failure === 'stage-partial' && String(file).startsWith(fixture.cliConfig + '.goagy-') && ++stageWrites === 2) {
               fs.writeFileSync(file, Buffer.from(bytes).subarray(0, 7), ...args);
               faults++;
               throw new Error('injected partial second config stage');
@@ -907,7 +907,7 @@ test('stock restores original custom values and exact BOM/format while preservin
   assert.strictEqual(first.ok, true, JSON.stringify(first));
   assert.strictEqual(detectConfiguredContextCap(fixture.home), 983040);
   const firstFiles = filesUnder(fixture.home);
-  const sidecar = fixture.config + '.easyag-context.json';
+  const sidecar = fixture.config + '.goagy-context.json';
   const saved = fs.readFileSync(sidecar);
   for (let index = 0; index < 3; index++) {
     const result = await applyKernelPatch({ contextMode: '900k' }, { targets: [fixture.target], homeDir: fixture.home });
@@ -968,7 +968,7 @@ test('unknown recovery records and externally changed owned values fail closed',
     await t.test(kind, async t => {
       const fixture = setupPatchCase(t);
       assert.strictEqual((await applyKernelPatch({ contextMode: '900k' }, { targets: [fixture.target], homeDir: fixture.home })).ok, true);
-      const stateFile = fixture.config + '.easyag-context.json';
+      const stateFile = fixture.config + '.goagy-context.json';
       if (kind === 'bad-json') fs.writeFileSync(stateFile, '{oops');
       if (kind === 'unknown-version') fs.writeFileSync(stateFile, '{"version":2}\n');
       if (kind === 'external-change') fs.writeFileSync(fixture.config, '{"contextWindow":"user-custom","theme":"new"}\n');
@@ -1016,7 +1016,7 @@ test('rollback failures explicitly report recovery snapshots and never claim com
   assert.ok(result.errors.some(message => message.startsWith('回滚 ') && message.includes(fixture.target.path)));
   assert.ok(result.errors.some(message => message.includes('恢复快照：')));
   assert.ok(!result.logs.some(line => line.startsWith('[完成]') || line.startsWith('[回滚] 已恢复')));
-  const recovery = filesUnder(fixture.target.dir).filter(file => /\.easyag-.*\.tmp$/.test(file));
+  const recovery = filesUnder(fixture.target.dir).filter(file => /\.goagy-.*\.tmp$/.test(file));
   assert.strictEqual(recovery.length, 1, 'retain exactly the snapshot needed for explicit manual recovery');
   assert.ok(fs.readFileSync(recovery[0]).equals(buildKernel()));
   assertConfigUnchanged(fixture);
@@ -1167,7 +1167,7 @@ test('legacy payload fingerprints are frozen independently of current payload up
 
 test('new tiers fit measured UTF-8 budgets and retain essential evidence and tool rules', () => {
   const groups = require('../features/kernel-prompt-payloads.json').tiers;
-  const budgets = { tier3: [460, 405, 1250], tier4: [615, 566, 2222] };
+  const budgets = { tier3: [459, 405, 1250], tier4: [614, 566, 2222] };
   for (const [tier, group] of Object.entries(groups)) {
     assert.deepStrictEqual(Object.values(group).map(text => Buffer.byteLength(text, 'utf8')), budgets[tier]);
     const text = Object.values(group).join('\n');
@@ -1235,7 +1235,7 @@ test('marker-only, mixed, damaged and future prompt payloads are never reported 
     buffer => { applyPromptTier(buffer, original, '4', undefined, 1); const slot = parseEmbedTemplates(buffer).get(CORE_SLOTS[0]); buffer[slot.dataOffset + 20] ^= 1; },
     buffer => { applyPromptTier(buffer, original, '4'); writePaddedTemplate(buffer, parseEmbedTemplates(buffer).get(CORE_SLOTS[1]), require('../features/kernel-prompt-payloads.json').tiers.tier3.functionCall); },
     buffer => { writePaddedTemplate(buffer, parseEmbedTemplates(buffer).get(CORE_SLOTS[0]), 'Argon Grounding Override'); },
-    buffer => { writePaddedTemplate(buffer, parseEmbedTemplates(buffer).get(CORE_SLOTS[0]), 'EasyAG balanced v3'); },
+    buffer => { writePaddedTemplate(buffer, parseEmbedTemplates(buffer).get(CORE_SLOTS[0]), 'Goagy balanced v3'); },
     buffer => { applyPromptTier(buffer, original, '4'); writePaddedTemplate(buffer, parseEmbedTemplates(buffer).get(BLOAT_SLOTS[0]), ''); }
   ];
   for (const mutate of mutations) {
@@ -1349,7 +1349,7 @@ test('same-layout tampering and mixed context fail closed without overwriting th
 });
 
 test('optional synthetic artifacts retain exact sizes, hashes and restoration evidence', () => {
-  const root = process.env.EASYAG_KERNEL_EVIDENCE_DIR;
+  const root = process.env.GOAGY_KERNEL_EVIDENCE_DIR;
   if (!root) return;
   const { createHash } = require('node:crypto');
   fs.mkdirSync(root, { recursive: true });

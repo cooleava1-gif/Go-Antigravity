@@ -38,7 +38,7 @@ function serveFile(response, base, relative) {
 // Serving index.html with the boot token inlined is the only way the page can prove it is the
 // one the shell just loaded: the token never appears in a URL, a file on disk or a header that a
 // stale tab could replay. EventSource cannot send headers, so /api/events accepts ?token= too.
-const TOKEN_PLACEHOLDER = '<!--EASYAG_BOOT_TOKEN-->';
+const TOKEN_PLACEHOLDER = '<!--GOAGY_BOOT_TOKEN-->';
 function serveIndex(response, base, token) {
   const target = path.resolve(base, 'index.html');
   let html;
@@ -48,7 +48,7 @@ function serveIndex(response, base, token) {
     return json(response, { ok: false, error: '文件不存在' }, 404);
   }
   if (html.includes(TOKEN_PLACEHOLDER)) {
-    html = html.replace(TOKEN_PLACEHOLDER, `<script>window.__EASYAG_TOKEN__=${JSON.stringify(token)};</script>`);
+    html = html.replace(TOKEN_PLACEHOLDER, `<script>window.__GOAGY_TOKEN__=${JSON.stringify(token)};</script>`);
   }
   response.writeHead(200, { 'Content-Type': TYPES['.html'], 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
   response.end(html);
@@ -119,7 +119,7 @@ function createApi(app) {
       // dead-ends on a 401 page.
       if (method === 'GET' && route === '/oauth-callback') return handleOAuthCallback(response, url);
       // Everything below is state-bearing: require the per-boot token handed to the page.
-      const presented = request.headers['x-easyag-token'] || url.searchParams.get('token') || '';
+      const presented = request.headers['x-goagy-token'] || url.searchParams.get('token') || '';
       if (!app.apiToken || presented !== app.apiToken) {
         return json(response, { ok: false, error: '本地会话已失效，请重新打开 Go-Antigravity 窗口' }, 401);
       }

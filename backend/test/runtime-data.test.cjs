@@ -10,7 +10,7 @@ const backendRoot = path.join(checkout, 'backend');
 
 test('default data directory ignores old runtime and local app-data settings', () => {
   const legacy = path.join(os.tmpdir(), 'synthetic-old-data');
-  assert.equal(resolveDataDirectory(backendRoot, { EASYAG_DATA_DIR: legacy, LOCALAPPDATA: legacy }),
+  assert.equal(resolveDataDirectory(backendRoot, { LEGACY_DATA_DIR: legacy, LOCALAPPDATA: legacy }),
     path.join(checkout, '.go-antigravity-data'));
   assert.equal(resolveDataDirectory(backendRoot, { GO_ANTIGRAVITY_DATA_DIR: '  ' }),
     path.join(checkout, '.go-antigravity-data'));

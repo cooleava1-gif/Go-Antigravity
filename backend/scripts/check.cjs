@@ -28,7 +28,7 @@ function check(file) {
     execFileSync(process.execPath, ['--check', file], { stdio: 'pipe' });
     return;
   }
-  const temporary = path.join(os.tmpdir(), `go-antigravity-check-${process.pid}-${path.basename(file, '.js')}.mjs`);
+  const temporary = path.join(os.tmpdir(), `goagy-check-${process.pid}-${path.basename(file, '.js')}.mjs`);
   fs.copyFileSync(file, temporary);
   try {
     execFileSync(process.execPath, ['--check', temporary], { stdio: 'pipe' });

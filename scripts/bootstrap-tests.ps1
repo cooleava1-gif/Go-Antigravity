@@ -2,9 +2,9 @@ param([string]$ProjectRoot = (Split-Path -Parent $PSScriptRoot))
 $ErrorActionPreference = 'Stop'
 . (Join-Path $ProjectRoot 'Start-Go-Antigravity.ps1')
 $script:passed = 0
-$script:base = Join-Path ([IO.Path]::GetTempPath()) ('easyag-bootstrap-test-' + [guid]::NewGuid())
+$script:base = Join-Path ([IO.Path]::GetTempPath()) ('goagy-bootstrap-test-' + [guid]::NewGuid())
 $oldNode = $env:GO_ANTIGRAVITY_NODE_EXE
-$oldCloud = $env:AGY_CLOUDFLARED
+$oldCloud = $env:GOAGY_CLOUDFLARED
 function Assert-True($Value, [string]$Message) { if (-not $Value) { throw $Message } }
 function Assert-Throws([scriptblock]$Action, [string]$Message) {
     $caught = $false
@@ -32,7 +32,7 @@ function New-Fixture {
     $script:launches = 0
     return $root
 }
-function Resolve-EasyAgCommand {
+function Resolve-GoagyCommand {
     param([string]$Name)
     if ($Name -eq 'node.exe') { return (Join-Path $script:fixture 'system/node.exe') }
     if ($Name -eq 'py.exe') { return (Join-Path $script:fixture 'system/py.exe') }
@@ -40,7 +40,7 @@ function Resolve-EasyAgCommand {
     if ($Name -eq 'npm.cmd') { return (Join-Path $script:fixture 'system/npm.cmd') }
     return $null
 }
-function Invoke-EasyAgCommand {
+function Invoke-GoagyCommand {
     param([string]$Executable, [string[]]$Arguments)
     $script:calls += ,@($Executable, $Arguments)
     $code = 0
@@ -77,57 +77,57 @@ try {
     New-Item -ItemType Directory -Path $script:base -Force | Out-Null
     Test-Case 'system Node and first npm ci' {
         $root = New-Fixture
-        Invoke-EasyAgBootstrap $root @() -PrepareOnly
+        Invoke-GoagyBootstrap $root @() -PrepareOnly
         Assert-True ($env:GO_ANTIGRAVITY_NODE_EXE -eq (Join-Path $root 'system/node.exe')) 'System Node was not passed to runtime'
         Assert-True (@($script:calls | Where-Object { $_[1] -contains 'ci' }).Count -eq 1) 'Expected one npm ci'
         Assert-True ($script:launches -eq 0) 'PrepareOnly launched desktop'
     }
     Test-Case 'legacy executable is ignored and valid dependencies are reused' {
         $root = New-Fixture
-        Set-Content -LiteralPath (Join-Path $root 'easyag-node.exe') -Value 'synthetic bundled'
-        Invoke-EasyAgBootstrap $root @() -PrepareOnly
-        Invoke-EasyAgBootstrap $root @() -PrepareOnly
+        Set-Content -LiteralPath (Join-Path $root 'legacy-node.exe') -Value 'synthetic bundled'
+        Invoke-GoagyBootstrap $root @() -PrepareOnly
+        Invoke-GoagyBootstrap $root @() -PrepareOnly
         Assert-True ($env:GO_ANTIGRAVITY_NODE_EXE -eq (Join-Path $root 'system/node.exe')) 'Legacy executable was preferred'
-        Assert-True (@($script:calls | Where-Object { $_[0] -eq (Join-Path $root 'easyag-node.exe') }).Count -eq 0) 'Legacy executable was invoked'
+        Assert-True (@($script:calls | Where-Object { $_[0] -eq (Join-Path $root 'legacy-node.exe') }).Count -eq 0) 'Legacy executable was invoked'
         Assert-True (@($script:calls | Where-Object { $_[1] -contains 'ci' }).Count -eq 1) 'Repeated npm ci on unchanged dependencies'
     }
     Test-Case 'lock changes trigger npm ci again' {
         $root = New-Fixture
-        Invoke-EasyAgBootstrap $root @() -PrepareOnly
+        Invoke-GoagyBootstrap $root @() -PrepareOnly
         Add-Content -LiteralPath (Join-Path $root 'backend/package-lock.json') -Value ' '
-        Invoke-EasyAgBootstrap $root @() -PrepareOnly
+        Invoke-GoagyBootstrap $root @() -PrepareOnly
         Assert-True (@($script:calls | Where-Object { $_[1] -contains 'ci' }).Count -eq 2) 'Lock change was ignored'
     }
     Test-Case 'npm failure prevents desktop launch' {
         $root = New-Fixture
         $script:npmExit = 17
-        Assert-Throws { Invoke-EasyAgBootstrap $root @() } 'npm ci failed'
+        Assert-Throws { Invoke-GoagyBootstrap $root @() } 'npm ci failed'
         Assert-True ($script:launches -eq 0) 'Desktop launched after npm failure'
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $root 'backend/node_modules/.easyag-bootstrap-lock'))) 'Failure created successful stamp'
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $root 'backend/node_modules/.goagy-bootstrap-lock'))) 'Failure created successful stamp'
     }
     Test-Case 'demo requires no Node or backend' {
         $root = New-Fixture
         Remove-Item -LiteralPath (Join-Path $root 'backend') -Recurse -Force
         Remove-Item -LiteralPath (Join-Path $root 'system') -Recurse -Force
-        Invoke-EasyAgBootstrap $root @('--demo') -PrepareOnly
+        Invoke-GoagyBootstrap $root @('--demo') -PrepareOnly
         Assert-True (@($script:calls | Where-Object { $_[1] -contains '--version' }).Count -eq 0) 'Demo checked Node'
     }
     Test-Case 'old Node is rejected' {
         $root = New-Fixture
         $script:nodeVersion = 'v20.19.0'
-        Assert-Throws { Invoke-EasyAgBootstrap $root @() } 'Node.js 22+'
+        Assert-Throws { Invoke-GoagyBootstrap $root @() } 'Node.js 22+'
         Assert-True ($script:launches -eq 0) 'Old Node launched desktop'
     }
     Test-Case 'old existing Python is rejected' {
         $root = New-Fixture
         $script:pythonVersion = 1
-        Assert-Throws { Invoke-EasyAgBootstrap $root @('--demo') } 'Existing .venv-qt'
+        Assert-Throws { Invoke-GoagyBootstrap $root @('--demo') } 'Existing .venv-qt'
         Assert-True ($script:launches -eq 0) 'Old Python launched desktop'
     }
     Test-Case 'Python pinned dependency mismatch installs and rechecks' {
         $root = New-Fixture
         $script:pythonDeps = $false
-        Invoke-EasyAgBootstrap $root @('--demo') -PrepareOnly
+        Invoke-GoagyBootstrap $root @('--demo') -PrepareOnly
         Assert-True (@($script:calls | Where-Object { $_[1] -contains 'pip' }).Count -eq 1) 'Pinned dependency mismatch not installed'
         Assert-True $script:pythonDeps 'Python dependencies not rechecked'
     }
@@ -135,41 +135,41 @@ try {
         $root = New-Fixture
         $script:pythonDeps = $false
         $script:pipExit = 4
-        Assert-Throws { Invoke-EasyAgBootstrap $root @('--demo') } 'Python dependency installation failed'
+        Assert-Throws { Invoke-GoagyBootstrap $root @('--demo') } 'Python dependency installation failed'
         Assert-True ($script:launches -eq 0) 'pip failure launched desktop'
     }
     Test-Case 'legacy executable cannot replace missing system Node' {
         $root = New-Fixture
-        Set-Content -LiteralPath (Join-Path $root 'easyag-node.exe') -Value 'synthetic legacy'
+        Set-Content -LiteralPath (Join-Path $root 'legacy-node.exe') -Value 'synthetic legacy'
         Remove-Item -LiteralPath (Join-Path $root 'system/node.exe')
-        Assert-Throws { Invoke-EasyAgBootstrap $root @() } 'Node.js 22+'
+        Assert-Throws { Invoke-GoagyBootstrap $root @() } 'Node.js 22+'
         Assert-True ($script:launches -eq 0) 'Desktop launched with legacy Node'
         Assert-True (@($script:calls | Where-Object { $_[1] -contains '--version' }).Count -eq 0) 'Legacy executable was invoked'
     }
     Test-Case 'successful npm exit with broken dependencies still prevents launch' {
         $root = New-Fixture
         $script:brokenInstall = $true
-        Assert-Throws { Invoke-EasyAgBootstrap $root @() } 'verification failed after npm ci'
+        Assert-Throws { Invoke-GoagyBootstrap $root @() } 'verification failed after npm ci'
         Assert-True ($script:launches -eq 0) 'Broken dependencies launched desktop'
     }
     Test-Case 'damaged dependencies invalidate unchanged lock stamp' {
         $root = New-Fixture
-        Invoke-EasyAgBootstrap $root @() -PrepareOnly
+        Invoke-GoagyBootstrap $root @() -PrepareOnly
         $script:deps = $false
-        Invoke-EasyAgBootstrap $root @() -PrepareOnly
+        Invoke-GoagyBootstrap $root @() -PrepareOnly
         Assert-True (@($script:calls | Where-Object { $_[1] -contains 'ci' }).Count -eq 2) 'Damaged dependencies not reinstalled'
     }
     Test-Case 'fresh Python venv is created after minimum version check' {
         $root = New-Fixture
         Remove-Item -LiteralPath (Join-Path $root '.venv-qt') -Recurse -Force
-        Invoke-EasyAgBootstrap $root @('--demo') -PrepareOnly
+        Invoke-GoagyBootstrap $root @('--demo') -PrepareOnly
         Assert-True (@($script:calls | Where-Object { $_[1] -contains 'venv' }).Count -eq 1) 'New environment not created'
     }
     Test-Case 'unsupported py alias falls back to working python' {
         $root = New-Fixture
         Remove-Item -LiteralPath (Join-Path $root '.venv-qt') -Recurse -Force
         $script:pyVersion = 2
-        Invoke-EasyAgBootstrap $root @('--demo') -PrepareOnly
+        Invoke-GoagyBootstrap $root @('--demo') -PrepareOnly
         $creation = @($script:calls | Where-Object { $_[1] -contains 'venv' })
         Assert-True ($creation.Count -eq 1 -and $creation[0][0] -eq (Join-Path $root 'system/python.exe')) 'Unusable py alias blocked Python fallback'
         Assert-True ($creation[0][1] -notcontains '-3') 'Python executable received py-only flag'
@@ -178,7 +178,7 @@ try {
         $root = New-Fixture
         Remove-Item -LiteralPath (Join-Path $root '.venv-qt') -Recurse -Force
         $script:pyThrows = $true
-        Invoke-EasyAgBootstrap $root @('--demo') -PrepareOnly
+        Invoke-GoagyBootstrap $root @('--demo') -PrepareOnly
         Assert-True (@($script:calls | Where-Object { $_[0] -eq (Join-Path $root 'system/python.exe') -and $_[1] -contains 'venv' }).Count -eq 1) 'Broken py executable blocked fallback'
     }
     Test-Case 'all unsupported fresh Python candidates stop before creating environment' {
@@ -186,13 +186,13 @@ try {
         Remove-Item -LiteralPath (Join-Path $root '.venv-qt') -Recurse -Force
         $script:pyVersion = 1
         $script:pythonVersion = 1
-        Assert-Throws { Invoke-EasyAgBootstrap $root @('--demo') -PrepareOnly } 'Python 3.10+'
+        Assert-Throws { Invoke-GoagyBootstrap $root @('--demo') -PrepareOnly } 'Python 3.10+'
         Assert-True (@($script:calls | Where-Object { $_[1] -contains 'venv' }).Count -eq 0) 'Unsupported Python created environment'
         Assert-True ($script:launches -eq 0) 'Unsupported Python launched desktop'
     }
     Write-Host ('Bootstrap synthetic tests: ' + $script:passed + ' passed, 0 failed')
 } finally {
     $env:GO_ANTIGRAVITY_NODE_EXE = $oldNode
-    $env:AGY_CLOUDFLARED = $oldCloud
+    $env:GOAGY_CLOUDFLARED = $oldCloud
     if (Test-Path -LiteralPath $script:base) { Remove-Item -LiteralPath $script:base -Recurse -Force }
 }

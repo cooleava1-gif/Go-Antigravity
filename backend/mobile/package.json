@@ -1,5 +1,5 @@
 {
-  "name": "go-antigravity-mobile-runtime",
+  "name": "goagy-mobile-runtime",
   "private": true,
   "type": "module",
   "engines": { "node": ">=22" }

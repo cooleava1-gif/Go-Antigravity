@@ -5,7 +5,7 @@
 以后只在下面这个目录继续开发：
 
 ```text
-C:\Users\97218\tools\EasyAntigravity-public
+C:\Users\97218\tools\Go-Antigravity-public
 ```
 
 这是当前独立 Git 历史、源码、测试和发布脚本的唯一源目录。GitHub 源码仓库也应当从这里提交和推送。

@@ -1,6 +1,6 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 
-const COOKIE = 'agy_pocket_session';
+const COOKIE = 'goagy_pocket_session';
 const LOGIN_LIMIT = 4096;
 const SESSION_MS = 12 * 60 * 60 * 1000;
 export function constantTimeEqual(a, b) {
@@ -12,7 +12,7 @@ export function validatePin(pin) {
   if (typeof pin !== 'string' || !/^[a-zA-Z0-9]{8,64}$/.test(pin)) throw new Error('INVALID_PIN');
   return pin;
 }
-const page = Buffer.from(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Antigravity Pocket 登录</title><style>html{color-scheme:dark;font:16px system-ui;background:#11151c;color:#eef2f8}body{max-width:25rem;margin:12vh auto;padding:24px}input,button{box-sizing:border-box;width:100%;font:inherit;padding:14px;margin-top:12px;border-radius:10px;border:1px solid #4a576b}button{background:#b4d3ff;color:#12213b}p{line-height:1.6;color:#b7c1d0}</style><main><h1>Antigravity Pocket</h1><p>输入桌面“手机访问”面板显示的 PIN。请勿将 PIN 与访问地址一同公开。</p><form action="/pocket-login" method="post"><label for="pin">访问 PIN</label><input id="pin" name="token" type="password" autocomplete="current-password" minlength="8" maxlength="64" required autofocus><button type="submit">安全登录</button></form></main></html>`);
+const page = Buffer.from(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Goagy Pocket 登录</title><style>html{color-scheme:dark;font:16px system-ui;background:#11151c;color:#eef2f8}body{max-width:25rem;margin:12vh auto;padding:24px}input,button{box-sizing:border-box;width:100%;font:inherit;padding:14px;margin-top:12px;border-radius:10px;border:1px solid #4a576b}button{background:#b4d3ff;color:#12213b}p{line-height:1.6;color:#b7c1d0}</style><main><h1>Goagy Pocket</h1><p>输入桌面“手机访问”面板显示的 PIN。请勿将 PIN 与访问地址一同公开。</p><form action="/pocket-login" method="post"><label for="pin">访问 PIN</label><input id="pin" name="token" type="password" autocomplete="current-password" minlength="8" maxlength="64" required autofocus><button type="submit">安全登录</button></form></main></html>`);
 function finish(res, status, text, headers = {}) {
   res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', ...headers });
   res.end(text);

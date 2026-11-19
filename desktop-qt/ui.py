@@ -708,7 +708,7 @@ class MainWindow(QMainWindow):
         head = QHBoxLayout()
         head_txt = QVBoxLayout()
         head_txt.setSpacing(2)
-        head_txt.addWidget(label("Antigravity Pocket 手机远程", "Section"))
+        head_txt.addWidget(label("Goagy Pocket 手机远程", "Section"))
         head_txt.addWidget(label("在手机浏览器中继续桌面对话", "Small", True))
         head.addLayout(head_txt, 1)
         self.mobile_state = label("未启动", "PillMuted")

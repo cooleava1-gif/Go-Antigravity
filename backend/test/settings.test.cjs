@@ -1,5 +1,5 @@
 'use strict';
-// Settings defaults decide whether EasyAG silently rewrites Antigravity's kernel, so they are
+// Settings defaults decide whether Goagy silently rewrites Antigravity's kernel, so they are
 // pinned here: a fresh install must land on the shipped axes, and an existing settings file that
 // predates them must adopt the new defaults instead of staying on "stock".
 const test = require('node:test');
@@ -33,7 +33,7 @@ test('mobile settings reject malformed origins and invalid mode types', () => {
 });
 
 function withSettings(run) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'easyag-settings-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'goagy-settings-'));
   const file = path.join(dir, 'settings.json');
   try { return run(file); } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }

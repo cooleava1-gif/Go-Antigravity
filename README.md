@@ -1,10 +1,10 @@
 # Go-Antigravity
 
-Go-Antigravity 是独立维护的 Windows 桌面工具。Python / PyQt6 提供原生界面，Node.js 后端随源码在本机启动，无需连接 EasyAntigravity 的旧运行时或更新服务。引用和改编的材料仍按 [第三方声明](backend/THIRD-PARTY-NOTICES.md) 保留来源及许可信息。
+Go-Antigravity 是独立维护的 Windows 桌面工具。Python / PyQt6 提供原生界面，Node.js 后端随源码在本机启动，无需连接旧运行时或更新服务。引用和改编的材料仍按 [第三方声明](backend/THIRD-PARTY-NOTICES.md) 保留来源及许可信息。
 
 ## 以后从哪里继续
 
-唯一的开发源目录是当前项目根目录：`C:\Users\97218\tools\EasyAntigravity-public`。以后修改功能、界面、内核补丁或发布流程，都在这里编辑并提交；不要在 `dist/`、`runtime/`、`.venv-qt/`、`backend/node_modules/` 或发布包解压目录里改代码。
+唯一的开发源目录是当前项目根目录：`C:\Users\97218\tools\Go-Antigravity-public`。以后修改功能、界面、内核补丁或发布流程，都在这里编辑并提交；不要在 `dist/`、`runtime/`、`.venv-qt/`、`backend/node_modules/` 或发布包解压目录里改代码。
 
 先看 [DEVELOPMENT.md](DEVELOPMENT.md) 了解目录分工和日常命令。根目录的 `Go-Antigravity.exe` 只是由 `desktop-qt/build-launcher.ps1` 生成的启动入口，真正的功能代码在 `desktop-qt/` 和 `backend/`。
 
@@ -18,7 +18,7 @@ Start-Go-Antigravity.cmd
 
 启动脚本会在项目内建立 `.venv-qt`，并按 `desktop-qt/requirements.txt` 安装固定版本依赖；后端依赖按 `backend/package-lock.json` 安装。首次准备环境需要联网，安装失败会停止并显示原因。已经准备好的环境会复用。Python 虚拟环境不能直接跨电脑搬运。
 
-启动脚本使用 `PATH` 上安装的 Node.js，不查找或启动旧 `easyag-node.exe`。源码不包含 EXE、虚拟环境或 `node_modules`。账户、设置和日志默认写入项目根目录的 `.go-antigravity-data/`；不会自动读取或迁移旧版账户、配置或加密密钥。
+启动脚本使用 `PATH` 上安装的 Node.js，不查找或启动旧式便携运行时。源码不包含 EXE、虚拟环境或 `node_modules`。账户、设置和日志默认写入项目根目录的 `.go-antigravity-data/`；不会自动读取或迁移旧版账户、配置或加密密钥。
 
 预览界面可运行 `Start-Go-Antigravity.cmd --demo`，只使用合成数据，不连接真实账户或服务。仍需安装 Python 与界面依赖。
 

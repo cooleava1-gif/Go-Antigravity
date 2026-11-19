@@ -63,11 +63,11 @@ test('all update arguments and environment sources are disabled without fetching
     onDictionaryUpdated: forbidden, onRuntimeUpdated: forbidden,
     events: { log: forbidden, publish: forbidden }, settings: { get: forbidden, update: forbidden }
   });
-  const previous = process.env.EASYAG_UPDATE_URL;
-  process.env.EASYAG_UPDATE_URL = 'https://untrusted.invalid/manifest.json';
+  const previous = process.env.LEGACY_UPDATE_URL;
+  process.env.LEGACY_UPDATE_URL = 'https://untrusted.invalid/manifest.json';
   t.after(() => {
-    if (previous === undefined) delete process.env.EASYAG_UPDATE_URL;
-    else process.env.EASYAG_UPDATE_URL = previous;
+    if (previous === undefined) delete process.env.LEGACY_UPDATE_URL;
+    else process.env.LEGACY_UPDATE_URL = previous;
   });
   const unreadable = new Proxy({}, { get: forbidden });
   for (const input of [undefined, {}, { manifestUrl: 'https://untrusted.invalid/direct.json' }, unreadable]) {
@@ -137,10 +137,10 @@ for (const explicitlyConfigured of [false, true]) test(`server boot uses only it
     __dirname: bundledRoot, console, setTimeout,
     process: {
       pkg: true, stdin,
-      execPath: path.join(dir, 'legacy-runtime', 'easyag-node.exe'),
+      execPath: path.join(dir, 'legacy-runtime', 'legacy-node.exe'),
       env: {
-        EASYAG_DATA_DIR: dir, EASYAG_TAURI: '1', EASYAG_READY_FILE: path.join(dir, 'old-ready.json'),
-        EASYAG_TEST_MODE: '1', EASYAG_DISABLE_OVERLAY: '0', EASYAG_UPDATE_URL: 'https://untrusted.invalid/',
+        LEGACY_DATA_DIR: dir, LEGACY_TAURI: '1', LEGACY_READY_FILE: path.join(dir, 'old-ready.json'),
+        LEGACY_TEST_MODE: '1', LEGACY_DISABLE_OVERLAY: '0', LEGACY_UPDATE_URL: 'https://untrusted.invalid/',
         ...(explicitlyConfigured ? {
           GO_ANTIGRAVITY_DATA_DIR: 'explicit-data', GO_ANTIGRAVITY_QT_HOST: '1',
           GO_ANTIGRAVITY_READY_FILE: readyFile, GO_ANTIGRAVITY_TEST_MODE: '1'

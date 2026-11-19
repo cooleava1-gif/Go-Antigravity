@@ -17,7 +17,7 @@ const REQUEST_MS = 1500;
 const CLEANUP_MS = 5000;
 
 // The manager owns only children it spawned. Output and child errors are never logged.
-function createMobileAccess({ events, settings, secrets, testMode = false, projectDir = process.env.AGY_POCKET_PROJECT || PROJECT_DIR, spawnProcess, fetchImpl } = {}) {
+function createMobileAccess({ events, settings, secrets, testMode = false, projectDir = process.env.GOAGY_POCKET_PROJECT || PROJECT_DIR, spawnProcess, fetchImpl } = {}) {
   const spawnChild = spawnProcess || spawn;
   const request = fetchImpl || (!testMode && globalThis.fetch);
   const canSpawn = !testMode || typeof spawnProcess === 'function';
@@ -33,7 +33,7 @@ function createMobileAccess({ events, settings, secrets, testMode = false, proje
     let values;
     try { values = settings?.get() || {}; } catch { values = {}; }
     const selectedMode = values.mobileMode ?? 'quick';
-    const candidate = values.mobileFixedUrl ?? process.env.AGY_POCKET_FIXED_URL ?? '';
+    const candidate = values.mobileFixedUrl ?? process.env.GOAGY_POCKET_FIXED_URL ?? '';
     let fixedUrl = '', error = null;
     if (!['quick', 'fixed'].includes(selectedMode)) error = '手机访问模式配置无效。';
     if (candidate !== '') {
@@ -56,7 +56,7 @@ function createMobileAccess({ events, settings, secrets, testMode = false, proje
     const config = owned?.config || configuration();
     return { state, mode: config.mode, fixedUrl: config.fixedUrl, fixedConfigured: Boolean(config.fixedUrl),
       tunnelTokenConfigured: credentials.configured, fixedAuth: credentials.available ? 'token' :
-        (!credentials.configured && process.env.AGY_POCKET_CF_CONFIG ? 'config' : null),
+        (!credentials.configured && process.env.GOAGY_POCKET_CF_CONFIG ? 'config' : null),
       publicUrl, startupPhase: owned?.phase || null,
       localUrl: LOCAL_URL, pin, autoStart: autoStart(),
       managed: Boolean(owned?.child), lastError, startedAt, available: available() };
@@ -339,17 +339,17 @@ function createMobileAccess({ events, settings, secrets, testMode = false, proje
       if (!current(op) || op.controller.signal.aborted) {
         return timeoutMessage ? await fail(op, timeoutMessage) : snapshot();
       }
-      const executable = process.env.AGY_POCKET_NODE || process.execPath;
-      const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:TUNNEL_|CF_TUNNEL|CLOUDFLARED_|AGY_POCKET_TUNNEL_TOKEN)/i.test(key)));
+      const executable = process.env.GOAGY_POCKET_NODE || process.execPath;
+      const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:TUNNEL_|CF_TUNNEL|CLOUDFLARED_|GOAGY_POCKET_TUNNEL_TOKEN)/i.test(key)));
       if (op.config.mode === 'fixed') {
         try {
           const token = secrets?.token();
-          if (token) { env.TUNNEL_TOKEN = token; delete env.AGY_POCKET_CF_CONFIG; }
+          if (token) { env.TUNNEL_TOKEN = token; delete env.GOAGY_POCKET_CF_CONFIG; }
         } catch { return await fail(op, '手机隧道凭据暂不可用，请解锁本地加密存储或重新配置。'); }
-      } else delete env.AGY_POCKET_CF_CONFIG;
+      } else delete env.GOAGY_POCKET_CF_CONFIG;
       op.child = spawnChild(executable, ['tunnel.mjs'], {
-        cwd: projectDir, env: { ...env, AGY_POCKET_PIN: op.pin,
-          AGY_POCKET_MODE: op.config.mode, AGY_POCKET_FIXED_URL: op.config.fixedUrl },
+        cwd: projectDir, env: { ...env, GOAGY_POCKET_PIN: op.pin,
+          GOAGY_POCKET_MODE: op.config.mode, GOAGY_POCKET_FIXED_URL: op.config.fixedUrl },
         windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
       });
       if (!op.child || typeof op.child.once !== 'function') throw new Error('spawn');

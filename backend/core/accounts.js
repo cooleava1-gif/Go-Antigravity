@@ -10,7 +10,7 @@ const { isEncrypted } = require('./vault');
 // rewriting the credential (see core/agcred.js) and restarting AG.
 //
 // Every entry is a real Google account's long-lived refresh token, so this file is the most
-// valuable thing EasyAG owns. Loading therefore never destroys data silently: anything that
+// valuable thing Goagy owns. Loading therefore never destroys data silently: anything that
 // cannot be read as the current schema is copied to accounts.bak-<timestamp>.json first, and
 // salvageable accounts are migrated instead of dropped.
 const STATE_VERSION = 2;

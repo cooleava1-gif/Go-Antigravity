@@ -4,10 +4,10 @@ const { installContextWidget } = require('../../features/context-widget');
 function rendererSource(dictionary, settings, binding) {
   return `(() => {
     if (window !== window.top) return;
-    const generation = (window.__easyagMountGeneration || 0) + 1;
-    window.__easyagMountGeneration = generation;
+    const generation = (window.__goagyMountGeneration || 0) + 1;
+    window.__goagyMountGeneration = generation;
     function mount() {
-      if (window.__easyagMountGeneration !== generation) return;
+      if (window.__goagyMountGeneration !== generation) return;
       (${installI18n.toString()})(window, document, ${JSON.stringify(dictionary)}, ${settings.enableI18n});
       (${installContextWidget.toString()})(window, document, ${settings.enableContextMonitor === true}, event => {
         if (typeof window[${JSON.stringify(binding)}] === 'function') window[${JSON.stringify(binding)}](JSON.stringify(event));
@@ -52,5 +52,5 @@ function workbenchHealth(window, document) {
 }
 
 const healthSource = '(' + workbenchHealth.toString() + ')(window, document)';
-const disposeSource = 'window.__easyagMountGeneration = (window.__easyagMountGeneration || 0) + 1; window.__easyagI18n?.dispose(); window.__easyagContext?.dispose();';
+const disposeSource = 'window.__goagyMountGeneration = (window.__goagyMountGeneration || 0) + 1; window.__goagyI18n?.dispose(); window.__goagyContext?.dispose();';
 module.exports = { rendererSource, disposeSource, workbenchHealth, healthSource };

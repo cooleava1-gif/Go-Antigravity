@@ -27,16 +27,16 @@ export function parseFixedUrl(value) {
   return url.origin;
 }
 export function parseRuntimeOptions(env = process.env) {
-  const mode = env.AGY_POCKET_MODE === undefined || env.AGY_POCKET_MODE === '' ? 'quick' : env.AGY_POCKET_MODE;
+  const mode = env.GOAGY_POCKET_MODE === undefined || env.GOAGY_POCKET_MODE === '' ? 'quick' : env.GOAGY_POCKET_MODE;
   if (mode !== 'quick' && mode !== 'fixed') throw fail('TUNNEL_START_FAILED');
   if (mode === 'quick') return { mode, publicUrl: null, config: null };
   if (env.TUNNEL_TOKEN) {
     try { validateTunnelToken(env.TUNNEL_TOKEN); } catch { throw fail('FIXED_CONFIG_REQUIRED'); }
-    return { mode, publicUrl: parseFixedUrl(env.AGY_POCKET_FIXED_URL), config: null, auth: 'token' };
+    return { mode, publicUrl: parseFixedUrl(env.GOAGY_POCKET_FIXED_URL), config: null, auth: 'token' };
   }
-  if (!env.AGY_POCKET_CF_CONFIG) throw fail('FIXED_CONFIG_REQUIRED');
-  if (!isAbsolute(env.AGY_POCKET_CF_CONFIG) || !/\.ya?ml$/i.test(env.AGY_POCKET_CF_CONFIG) || /[\u0000-\u001f]/.test(env.AGY_POCKET_CF_CONFIG)) throw fail('FIXED_CONFIG_REQUIRED');
-  return { mode, publicUrl: parseFixedUrl(env.AGY_POCKET_FIXED_URL), config: env.AGY_POCKET_CF_CONFIG };
+  if (!env.GOAGY_POCKET_CF_CONFIG) throw fail('FIXED_CONFIG_REQUIRED');
+  if (!isAbsolute(env.GOAGY_POCKET_CF_CONFIG) || !/\.ya?ml$/i.test(env.GOAGY_POCKET_CF_CONFIG) || /[\u0000-\u001f]/.test(env.GOAGY_POCKET_CF_CONFIG)) throw fail('FIXED_CONFIG_REQUIRED');
+  return { mode, publicUrl: parseFixedUrl(env.GOAGY_POCKET_FIXED_URL), config: env.GOAGY_POCKET_CF_CONFIG };
 }
 export async function validateExternalConfig(path, root = repository) {
   try {
@@ -63,12 +63,12 @@ export function cloudflaredEnvironment(env, mode) {
 }
 export function originEnvironment(env) {
   return Object.fromEntries(Object.entries(env).filter(([key]) =>
-    !/^(?:TUNNEL_|CF_TUNNEL|CLOUDFLARED_|AGY_POCKET_(?:CF_CONFIG|TUNNEL_TOKEN))/i.test(key)));
+    !/^(?:TUNNEL_|CF_TUNNEL|CLOUDFLARED_|GOAGY_POCKET_(?:CF_CONFIG|TUNNEL_TOKEN))/i.test(key)));
 }
 export async function findCloudflared(env = process.env, platform = process.platform) {
   const exe = platform === 'win32' ? 'cloudflared.exe' : 'cloudflared';
   const candidates = [];
-  if (env.AGY_CLOUDFLARED) candidates.push(env.AGY_CLOUDFLARED);
+  if (env.GOAGY_CLOUDFLARED) candidates.push(env.GOAGY_CLOUDFLARED);
   else {
     if (platform === 'win32') {
       for (const base of [env.ProgramFiles, env['ProgramFiles(x86)']]) if (base) candidates.push(join(base, 'cloudflared', exe));

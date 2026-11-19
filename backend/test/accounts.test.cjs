@@ -7,7 +7,7 @@ const { createAccounts, STATE_VERSION } = require('../core/accounts');
 const { createVault } = require('../core/vault');
 
 function tempDir() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'easyag-accounts-test-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'goagy-accounts-test-'));
   test.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* windows lock */ } });
   return dir;
 }
