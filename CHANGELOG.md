@@ -1,6 +1,17 @@
 # Go-Antigravity 更新日志
 
-历史条目保留用于追溯来源；其中仍出现的 Go-Antigravity 名称、旧档位和旧启动行为不代表当前版本。当前行为以 [README](README.md)、[开发指引](DEVELOPMENT.md) 和 [发布说明](RELEASE.md) 为准。
+历史条目按当时发布时的名称与行为保留，仅用于追溯来源；其中出现的旧名称（Goagy、EasyAG 等）、旧档位和旧启动行为均不代表当前版本——当前源码已统一为 Go-Antigravity 命名。当前行为以 [README](README.md)、[开发指引](DEVELOPMENT.md) 和 [发布说明](RELEASE.md) 为准。
+
+## 未发布：发布前命名与署名清理（2026-11-19）
+
+- **统一命名**：环境变量 `GOAGY_*` 改为 `GO_ANTIGRAVITY_*`（手机运行时为 `GO_ANTIGRAVITY_MOBILE_*`）；页面全局 `__goagy*` 改为 `__goAntigravity*`；请求头 `X-Go-Antigravity-Token`、`x-go-antigravity-mobile`；会话 Cookie `go_antigravity_mobile_session`；日志 `go-antigravity.log`；上下文监控节点 `go-antigravity-context-monitor`；临时文件前缀 `.go-antigravity-`；手机路由前缀 `/mobile/`（原 `/goagy-pocket/`）；PowerShell 函数名统一为 `*-Antigravity*`。
+- **保留的两处兼容字面量**：旧 Tauri 数据目录 `com.goagy.launcher.tauri`（用于找到并清理遗留数据）与 `backend/features/kernel-patch.js` 对旧内核标记 `Goagy ` 的识别，两者均带注释说明用途。
+- **提示词标记**：新载荷首行改为 `Go-Antigravity compact v2` / `Go-Antigravity balanced v2`，内核测试按新字节重算预算与 SHA-256（精简档 468 / 405 / 1250，均衡档 623 / 566 / 2222）。
+- **界面**：手机远程区块标题去掉旧名，自动开关文案为「启动 AG 时自动开启手机远程」。
+- **独立实现替换**：`backend/adapters/desktop/language-service-discovery.js` 与 `backend/features/context-widget.js` 改写为独立实现（对外接口、错误文案、数值阈值和 DOM 契约保持不变），因此第三方声明里对应的归属段不再需要保留。
+- **文档与署名**：第三方声明只保留 PyQt6 / Qt / Node 等实际依赖的许可清单；README 致谢只保留汉化词典（nicktan @ linux.do）。
+- **测试**：后端 `npm run verify` 734 项全过（测试数量不变）；Qt 侧 5 个测试文件 77 项与 `smoke_test.py` 110 项全过。
+
 
 ## 未发布：去掉补丁的空间开销，提示词只留两档（2026-11-19）
 

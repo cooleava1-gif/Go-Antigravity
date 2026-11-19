@@ -1,10 +1,18 @@
 # Go-Antigravity
 
-Go-Antigravity 是独立维护的 Windows 桌面工具。Python / PyQt6 提供原生界面，Node.js 后端随源码在本机启动，无需连接旧运行时或更新服务。引用和改编的材料仍按 [第三方声明](backend/THIRD-PARTY-NOTICES.md) 保留来源及许可信息。
+Go-Antigravity 是独立维护的 Windows 桌面工具。Python / PyQt6 提供原生界面，Node.js 后端随源码在本机启动，无需连接旧运行时或更新服务。第三方依赖的许可清单见 [第三方声明](backend/THIRD-PARTY-NOTICES.md)。
+
+## 界面预览
+
+深色主题的「概览」与「账户」页；截图由 `desktop-qt/smoke_test.py` 使用合成数据生成，不含真实账户：
+
+![概览](docs/images/workbench-dark.png)
+
+![账户](docs/images/accounts-dark.png)
 
 ## 以后从哪里继续
 
-唯一的开发源目录是当前项目根目录：`C:\Users\97218\tools\Go-Antigravity-public`。以后修改功能、界面、内核补丁或发布流程，都在这里编辑并提交；不要在 `dist/`、`runtime/`、`.venv-qt/`、`backend/node_modules/` 或发布包解压目录里改代码。
+唯一的开发源目录是当前克隆下来的项目根目录。以后修改功能、界面、内核补丁或发布流程，都在这里编辑并提交；不要在 `dist/`、`runtime/`、`.venv-qt/`、`backend/node_modules/` 或发布包解压目录里改代码。
 
 先看 [DEVELOPMENT.md](DEVELOPMENT.md) 了解目录分工和日常命令。根目录的 `Go-Antigravity.exe` 只是由 `desktop-qt/build-launcher.ps1` 生成的启动入口，真正的功能代码在 `desktop-qt/` 和 `backend/`。
 
@@ -33,7 +41,7 @@ Start-Go-Antigravity.cmd
 
 系统提示词只有「官方原版」「精简·防编造」两个常规选择，出厂默认是「精简·防编造」（`promptTier='3'`）：沿用既有 v2 精简载荷，强调先读取再断言、按实际工具契约操作、失败后核实状态、完成验证后再汇报，但不保证消除模型幻觉。`4`（原均衡档）及旧 `1` / `2` 仍可识别与恢复，不在界面自动勾选；仅改上下文或启动同步不会顺带迁移旧提示词。旧版「自定义上传」档已移除：界面不再提供入口，曾被打过该档的内核仍会被识别为「旧自定义」，可用「恢复官方内核」还原。
 
-「精简·防编造」只重写 `guidelines.tmpl`、`function_call.tmpl`、`communication_style.tmpl` 三个核心指令模板（槽位共 4088B，v2 载荷约 2114B，其余以空注释填充），保留 `identity.tmpl`、工具声明、全部辅助模板和 `applyEdits` 旁路。首次修改内核时创建一次原始 `.bak` 并启用 NTFS 压缩（`compact.exe`，本机实测 194 MB → 约 109 MB，约 1.8:1），之后复用同一份备份；补丁失败时按变更区间把原始字节写回，不再复制整份镜像，只有区间写回本身失败时才额外留下一份显式的恢复快照（`.goagy-*.tmp`），可直接拷回。请按敏感文件保护备份目录。
+「精简·防编造」只重写 `guidelines.tmpl`、`function_call.tmpl`、`communication_style.tmpl` 三个核心指令模板（槽位共 4088B，v2 载荷约 2114B，其余以空注释填充），保留 `identity.tmpl`、工具声明、全部辅助模板和 `applyEdits` 旁路。首次修改内核时创建一次原始 `.bak` 并启用 NTFS 压缩（`compact.exe`，本机实测 194 MB → 约 109 MB，约 1.8:1），之后复用同一份备份；补丁失败时按变更区间把原始字节写回，不再复制整份镜像，只有区间写回本身失败时才额外留下一份显式的恢复快照（`.go-antigravity-*.tmp`），可直接拷回。请按敏感文件保护备份目录。
 
 上下文键保持 `stock` / `512k` / `900k`，界面显示「官方原版 / 512K / 900K / 1M」。当前所有受支持模型都实际支持 1M 上下文；本工具设置的本地客户端上限是 512000 或 983040 tokens。既有字节签名与上下文配置的事务/恢复机制不变。
 
@@ -78,4 +86,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File desktop-qt/build-launcher.ps
 
 本项目没有在线自更新，旧 `runtime/current` 覆盖层不会替换当前源码。Google Antigravity 的官方联网依赖，以及启用手机公网远程时可选的 Cloudflare Tunnel，是独立于旧发布方的服务；仅预览界面可用 `--demo`。本源码树来自核准文件清单，使用独立 Git 历史，不继承原开发仓库的提交、标签和远程配置。源码发布步骤和 Windows 包发布步骤见 [RELEASE.md](RELEASE.md)；不要上传整个开发目录。
 
-项目许可证见 [LICENSE](LICENSE)。第三方来源、依赖许可和公开分发前尚待核实的内核补丁授权，统一见 [第三方声明](backend/THIRD-PARTY-NOTICES.md)。
+项目许可证见 [LICENSE](LICENSE)。PyQt6 / Qt / Node 等第三方依赖的许可证清单见 [第三方声明](backend/THIRD-PARTY-NOTICES.md)；内核补丁为仓库内独立实现，不加载也不打包任何外部补丁工具，公开分发前仍需核对实际 Antigravity 客户端文件与可选运行时组件的许可条件。
+
+## 致谢
+
+汉化词典来源于社区整理，包括 nicktan @ [linux.do](https://linux.do)。
