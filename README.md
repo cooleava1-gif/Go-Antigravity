@@ -10,7 +10,7 @@ Go-Antigravity 是独立维护的 Windows 桌面工具。Python / PyQt6 提供�
 
 ## 从源码启动
 
-安装 **Python 3.10 或以上**，以及 **Node.js 22 或以上（含 npm）**，然后在项目根目录运行：
+安装 **Python 3.10 或以上**，以及 **Node.js 22.13 或以上（含 npm）**，然后在项目根目录运行：
 
 ~~~bat
 Start-Go-Antigravity.cmd

@@ -25,7 +25,7 @@
     "ws": "^8.21.3"
   },
   "engines": {
-    "node": ">=22"
+    "node": "^22.13.0 || >=23.4.0"
   },
   "displayName": "Go-Antigravity",
   "productName": "Go-Antigravity"

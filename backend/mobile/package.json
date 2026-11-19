@@ -2,5 +2,5 @@
   "name": "goagy-mobile-runtime",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22" }
+  "engines": { "node": "^22.13.0 || >=23.4.0" }
 }

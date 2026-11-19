@@ -8,7 +8,7 @@ Go-Antigravity 桌面提供「概览」「账户」「远程」「日志」四�
 
 随机模式使用 Cloudflare Quick Tunnel，不需要 Cloudflare 账户或固定域名。它用于临时远程访问，没有可用性保证，单隧道并发请求数有限，且不支持 SSE；手机界面的实时更新会在 SSE 不可用时回退为轮询。不要把随机网址当作永久书签。
 
-依赖：完整的 backend/mobile 目录、Node.js 22+（可使用目录内兼容运行时或系统 Node.js），以及单独安装的 cloudflared。连接器查找顺序见下方配置；缺少连接器时界面会提示，不会静默下载或修改系统。
+依赖：完整的 backend/mobile 目录、Node.js 22.13+（可使用目录内兼容运行时或系统 Node.js），以及单独安装的 cloudflared。连接器查找顺序见下方配置；缺少连接器时界面会提示，不会静默下载或修改系统。
 
 ## 可选：固定域名
 
@@ -49,7 +49,7 @@ PIN 仅保存在当前进程与受保护的本地页面内存中，不写入设�
 
 ## 源码分发与维护
 
-桌面源码运行需 Python 3.10+ 与 Node.js 22+（含 npm），使用根目录 Start-Go-Antigravity.cmd 准备依赖并启动。仅运行后端可在 backend 中执行 npm ci、npm start；测试执行 npm run verify。目录型 Windows 发布包由 scripts/package-windows.ps1 生成，内含 Go-Antigravity.exe、Node、Python/PyQt 和生产依赖，运行时不执行 npm/pip。只构建 Go-Antigravity.exe 时，它仍只是调用启动脚本的入口，需要完整源码与开发机运行时。cloudflared 需另行安装或按其许可证单独提供。
+桌面源码运行需 Python 3.10+ 与 Node.js 22.13+（含 npm），使用根目录 Start-Go-Antigravity.cmd 准备依赖并启动。仅运行后端可在 backend 中执行 npm ci、npm start；测试执行 npm run verify。目录型 Windows 发布包由 scripts/package-windows.ps1 生成，内含 Go-Antigravity.exe、Node、Python/PyQt 和生产依赖，运行时不执行 npm/pip。只构建 Go-Antigravity.exe 时，它仍只是调用启动脚本的入口，需要完整源码与开发机运行时。cloudflared 需另行安装或按其许可证单独提供。
 
 发布前检查版本库内容，排除 .env、用户设置、账号库、日志、Cloudflare YAML/凭据 JSON、证书、备份与运行时文件。保留 backend/mobile/vendor 与二维码编码器的许可证。不要把本机安装目录打包后直接上传。
 

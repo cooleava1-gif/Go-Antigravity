@@ -5,6 +5,7 @@ $script:passed = 0
 $script:base = Join-Path ([IO.Path]::GetTempPath()) ('goagy-bootstrap-test-' + [guid]::NewGuid())
 $oldNode = $env:GO_ANTIGRAVITY_NODE_EXE
 $oldCloud = $env:GOAGY_CLOUDFLARED
+$oldReady = $env:GOAGY_QT_READY_FILE
 function Assert-True($Value, [string]$Message) { if (-not $Value) { throw $Message } }
 function Assert-Throws([scriptblock]$Action, [string]$Message) {
     $caught = $false
@@ -30,6 +31,7 @@ function New-Fixture {
     $script:pipExit = 0
     $script:calls = @()
     $script:launches = 0
+    $script:launchMode = 'success'
     return $root
 }
 function Resolve-GoagyCommand {
@@ -67,7 +69,18 @@ function Invoke-GoagyCommand {
     elseif (($Arguments -join ' ') -like '*importlib.metadata*') { if (-not $script:pythonDeps) { $code = 1 } }
     return [pscustomobject]@{ExitCode = $code; Output = $output}
 }
-function Start-Process { param($FilePath, $ArgumentList, $WorkingDirectory) $script:launches++ }
+function Start-Process {
+    param($FilePath, $ArgumentList, $WorkingDirectory, [switch]$PassThru)
+    $script:launches++
+    $child = [pscustomobject]@{ HasExited = ($script:launchMode -eq 'early'); ExitCode = 17 }
+    $child | Add-Member ScriptMethod Dispose {}
+    $child | Add-Member ScriptMethod Kill { $script:timedOutChildStopped = $true }
+    if ($script:launchMode -eq 'success') {
+        Set-Content -LiteralPath $env:GOAGY_QT_READY_FILE -Value 'ready'
+    }
+    $script:readyDir = Split-Path -Parent $env:GOAGY_QT_READY_FILE
+    return $child
+}
 function Test-Case([string]$Name, [scriptblock]$Body) {
     & $Body
     $script:passed++
@@ -112,11 +125,37 @@ try {
         Invoke-GoagyBootstrap $root @('--demo') -PrepareOnly
         Assert-True (@($script:calls | Where-Object { $_[1] -contains '--version' }).Count -eq 0) 'Demo checked Node'
     }
+    Test-Case 'windowed startup completes the readiness handshake' {
+        $root = New-Fixture
+        Invoke-GoagyBootstrap $root @('--demo')
+        Assert-True ($script:launches -eq 1) 'Windowed desktop was not launched'
+        Assert-True ($env:GOAGY_QT_READY_FILE -eq $oldReady) 'Readiness environment leaked into the bootstrap process'
+    }
+    Test-Case 'windowed startup reports an early child exit' {
+        $root = New-Fixture
+        $script:launchMode = 'early'
+        Assert-Throws { Invoke-GoagyBootstrap $root @('--demo') -ReadyTimeoutSeconds 1 } 'exited before readiness handshake'
+        Assert-True ($script:launches -eq 1) 'Windowed desktop was not launched'
+    }
+    Test-Case 'windowed startup reports a readiness timeout' {
+        $root = New-Fixture
+        $script:launchMode = 'timeout'
+        $script:timedOutChildStopped = $false
+        Assert-Throws { Invoke-GoagyBootstrap $root @('--demo') -ReadyTimeoutSeconds 0 } 'did not complete readiness handshake'
+        Assert-True $script:timedOutChildStopped 'Timed out child is still running'
+        Assert-True (-not (Test-Path -LiteralPath $script:readyDir)) 'Readiness directory was left behind'
+    }
     Test-Case 'old Node is rejected' {
         $root = New-Fixture
         $script:nodeVersion = 'v20.19.0'
-        Assert-Throws { Invoke-GoagyBootstrap $root @() } 'Node.js 22+'
+        Assert-Throws { Invoke-GoagyBootstrap $root @() } 'Node.js 22.13+'
         Assert-True ($script:launches -eq 0) 'Old Node launched desktop'
+    }
+    Test-Case 'Node 22 before the sqlite-supported minor is rejected' {
+        $root = New-Fixture
+        $script:nodeVersion = 'v22.12.0'
+        Assert-Throws { Invoke-GoagyBootstrap $root @() } 'Node.js 22.13+'
+        Assert-True ($script:launches -eq 0) 'Unsupported Node launched desktop'
     }
     Test-Case 'old existing Python is rejected' {
         $root = New-Fixture
@@ -142,7 +181,7 @@ try {
         $root = New-Fixture
         Set-Content -LiteralPath (Join-Path $root 'legacy-node.exe') -Value 'synthetic legacy'
         Remove-Item -LiteralPath (Join-Path $root 'system/node.exe')
-        Assert-Throws { Invoke-GoagyBootstrap $root @() } 'Node.js 22+'
+        Assert-Throws { Invoke-GoagyBootstrap $root @() } 'Node.js 22.13+'
         Assert-True ($script:launches -eq 0) 'Desktop launched with legacy Node'
         Assert-True (@($script:calls | Where-Object { $_[1] -contains '--version' }).Count -eq 0) 'Legacy executable was invoked'
     }
@@ -194,5 +233,6 @@ try {
 } finally {
     $env:GO_ANTIGRAVITY_NODE_EXE = $oldNode
     $env:GOAGY_CLOUDFLARED = $oldCloud
+    $env:GOAGY_QT_READY_FILE = $oldReady
     if (Test-Path -LiteralPath $script:base) { Remove-Item -LiteralPath $script:base -Recurse -Force }
 }

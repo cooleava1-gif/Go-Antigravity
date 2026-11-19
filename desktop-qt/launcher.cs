@@ -50,6 +50,7 @@ internal static class Launcher {
             }
         } catch (Exception error) {
             MessageBox.Show(error.Message, "Go-Antigravity", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            Environment.ExitCode = 1;
         }
     }
 }

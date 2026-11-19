@@ -2,7 +2,7 @@
 
 ## 运行环境
 
-源码分发需 Python 3.10+、Node.js 22+（含 npm）。运行 `Start-Go-Antigravity.cmd`，脚本按锁定清单准备 Python 和后端依赖；首次安装需要联网。从 `PATH` 使用已安装的 `node.exe`，不会选用旧式便携运行时。
+源码分发需 Python 3.10+、Node.js 22.13+（含 npm）。运行 `Start-Go-Antigravity.cmd`，脚本按锁定清单准备 Python 和后端依赖；首次安装需要联网。从 `PATH` 使用已安装的 `node.exe`，不会选用旧式便携运行时。
 
 GitHub 发布包由 `scripts/package-windows.ps1` 生成，目录包含 `Go-Antigravity.exe`、应用源文件、生产 `node_modules`、`runtime/node/node.exe` 和 `runtime/python/`。发布包不需要用户安装 Python、Node.js 或执行 npm/pip；`runtime/manifest.json` 记录构建提交和运行时版本。这个包仍然是目录型发布，不是单文件 EXE。不要把开发目录中的 `.venv-qt`、`backend/node_modules` 或用户数据直接复制到发布包。
 

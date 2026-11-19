@@ -12,6 +12,8 @@ $ErrorActionPreference = 'Stop'
 $script:ProjectRoot = Split-Path -Parent $PSScriptRoot
 $script:PackageName = 'Go-Antigravity-windows-x64'
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $script:ProjectRoot 'dist' }
+. (Join-Path $PSScriptRoot 'package-rules.ps1')
+. (Join-Path $script:ProjectRoot 'Start-Go-Antigravity.ps1')
 
 function Fail([string]$Message) {
     throw "Windows package build failed: $Message"
@@ -65,8 +67,8 @@ function Get-NodeSourcePath {
     $candidate = if ($Requested) { Get-FullPath $Requested } else { Resolve-CommandPath 'node.exe' }
     Assert-File $candidate 'Node.js executable'
     $version = Get-VersionFromExecutable $candidate 'Node.js'
-    if ($version -notmatch '^v(\d+)\.' -or [int]$Matches[1] -lt 22) {
-        Fail "Node.js 22+ is required; found $version"
+    if (-not (Test-GoagyNodeVersion $version)) {
+        Fail "Node.js 22.13+ is required; found $version"
     }
     return [pscustomobject]@{ Path = $candidate; Version = $version }
 }
@@ -157,7 +159,7 @@ function Copy-TreeFiltered {
     New-Item -ItemType Directory -Path $destinationRoot -Force | Out-Null
     foreach ($item in Get-ChildItem -LiteralPath $sourceRoot -Recurse -Force) {
         $relative = $item.FullName.Substring($sourceRoot.Length).TrimStart('\')
-        if (-not (& $Include $item $relative)) { continue }
+        if (-not (& $Include $item $relative) -or (Test-PackageForbiddenRelativePath $relative)) { continue }
         $target = Join-Path $destinationRoot $relative
         if ($item.PSIsContainer) {
             New-Item -ItemType Directory -Path $target -Force | Out-Null
@@ -170,18 +172,12 @@ function Copy-TreeFiltered {
 
 function Should-CopyDesktopItem {
     param($Item, [string]$Relative)
-    if ($Relative -match '(^|[\\/])(__pycache__|\.qa)([\\/]|$)') { return $false }
-    if (-not $Item.PSIsContainer -and ($Item.Name -match '^(test_.*|smoke_test)\.py$')) { return $false }
-    return $true
+    return $Item.PSIsContainer -or $Item.Name -notmatch '^(test_.*|smoke_test)\.py$'
 }
 
 function Should-CopyBackendItem {
     param($Item, [string]$Relative)
-    if ($Relative -match '(^|[\\/])(test|node_modules|runtime|\.runtime|backups|_attic)([\\/]|$)') { return $false }
-    if ($Relative -match '(^|[\\/])(__pycache__|\.git)([\\/]|$)') { return $false }
-    if (-not $Item.PSIsContainer -and ($Item.Name -match '(\.log(\..*)?|\.bak|\.old_run)$')) { return $false }
-    if (-not $Item.PSIsContainer -and ($Item.Name -match '^(accounts|settings|permission-session|danger-rules)\.json$')) { return $false }
-    return $true
+    return $Relative -notmatch '(^|[\\/])(node_modules|runtime)([\\/]|$)'
 }
 
 function Copy-PythonRuntime {
@@ -328,19 +324,17 @@ if ($PythonSource) {
     Assert-File $pythonBaseExecutable 'Python base executable'
 }
 
-Write-Host "Building native launcher..."
-$powershell = Join-Path $env:WINDIR 'System32/WindowsPowerShell/v1.0/powershell.exe'
-Invoke-Native $powershell @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $script:ProjectRoot 'desktop-qt/build-launcher.ps1')) 'native launcher build'
-$launcher = Join-Path $script:ProjectRoot 'Go-Antigravity.exe'
-Assert-File $launcher 'built Go-Antigravity.exe'
-
 $stageBackend = Join-Path $stage 'backend'
 $stageDesktop = Join-Path $stage 'desktop-qt'
 $stageRuntimeNode = Join-Path $stage 'runtime/node'
 $stageRuntimePython = Join-Path $stage 'runtime/python'
 New-Item -ItemType Directory -Path $stage,$stageBackend,$stageDesktop,$stageRuntimeNode,$stageRuntimePython -Force | Out-Null
 
-Copy-FileSafe $launcher (Join-Path $stage 'Go-Antigravity.exe')
+Write-Host 'Building native launcher in the package...'
+$launcher = Join-Path $stage 'Go-Antigravity.exe'
+$powershell = Join-Path $env:WINDIR 'System32/WindowsPowerShell/v1.0/powershell.exe'
+Invoke-Native $powershell @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $script:ProjectRoot 'desktop-qt/build-launcher.ps1'), '-OutputPath', $launcher) 'native launcher build'
+Assert-File $launcher 'built Go-Antigravity.exe'
 Copy-FileSafe (Join-Path $script:ProjectRoot 'Start-Go-Antigravity.ps1') (Join-Path $stage 'Start-Go-Antigravity.ps1')
 Copy-FileSafe (Join-Path $script:ProjectRoot 'Start-Go-Antigravity.cmd') (Join-Path $stage 'Start-Go-Antigravity.cmd')
 foreach ($document in @('README.md', 'PORTABLE.md', 'LICENSE')) {
@@ -381,10 +375,7 @@ $manifest = [ordered]@{
 New-Item -ItemType Directory -Path (Join-Path $stage 'runtime') -Force | Out-Null
 $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $stage 'runtime/manifest.json') -Encoding UTF8
 
-$forbidden = Get-ChildItem -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue | Where-Object {
-    $_.FullName -match '(\\|/)(\.git|\.go-antigravity-data|__pycache__|test|backups|_attic)(\\|/)' -or
-    $_.Name -match '(^|\.)(log|bak)$'
-}
+$forbidden = Get-PackageForbiddenItems $stage
 if ($forbidden) {
     $names = ($forbidden | Select-Object -First 10 -ExpandProperty FullName) -join '; '
     Fail "forbidden development or user data entered the package: $names"

@@ -382,7 +382,7 @@ class BackendRuntime(QObject):
         executable = backend_node_executable(environment)
         source = self.root / "backend" / "server.js"
         if executable is None or not source.is_file():
-            self._fail("未找到 Node.js 22+ 或 backend/server.js，请使用项目启动脚本准备依赖")
+            self._fail("未找到 Node.js 22.13+ 或 backend/server.js，请使用项目启动脚本准备依赖")
             return
         cleanup_orphaned_temporary(self.root)
         try:

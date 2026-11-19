@@ -1,14 +1,50 @@
 name: Windows verification
+
 on:
   push:
+    branches: ['**']
+    tags-ignore: ['v*']  # The release workflow verifies the tag via workflow_call.
   pull_request:
   workflow_dispatch:
+  workflow_call:
+
 permissions:
   contents: read
+
 jobs:
-  verify:
+  backend:
+    name: Backend Node ${{ matrix.node-version }}
     runs-on: windows-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['22.13.0', '24.x']
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+      GO_ANTIGRAVITY_TEST_MODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Install locked backend dependencies
+        shell: pwsh
+        run: npm --prefix backend ci
+      - name: Verify backend
+        shell: pwsh
+        run: |
+          node -e "const db = new (require('node:sqlite').DatabaseSync)(':memory:'); db.prepare('SELECT 1').get(); db.close()"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm --prefix backend run verify
+
+  desktop:
+    name: Desktop and bootstrap
+    runs-on: windows-latest
+    timeout-minutes: 20
     env:
       PYTHONDONTWRITEBYTECODE: '1'
       PYTHONUTF8: '1'
@@ -18,7 +54,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24.x'
           cache: npm
           cache-dependency-path: backend/package-lock.json
       - uses: actions/setup-python@v5
@@ -31,11 +67,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m pip install -r desktop-qt/requirements.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Verify backend
-        run: npm --prefix backend run verify
-      - name: Verify bootstrap without real installation
-        shell: pwsh
-        run: ./scripts/bootstrap-tests.ps1
+      - name: Verify Windows process isolation, bootstrap and package rules
+        shell: powershell
+        run: |
+          ./scripts/bootstrap-tests.ps1
+          ./scripts/windows-process-tests.ps1
+          ./scripts/package-rules-tests.ps1
       - name: Verify desktop with synthetic data
         shell: pwsh
         run: |

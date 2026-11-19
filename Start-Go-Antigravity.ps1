@@ -54,8 +54,8 @@ function Get-GoagyPackagedNode {
     param([string]$ProjectRoot)
     $candidate = Join-Path $ProjectRoot 'runtime/node/node.exe'
     $result = Invoke-GoagyCommand $candidate @('--version')
-    if ($result.ExitCode -ne 0 -or $result.Output.Trim() -notmatch '^v(\d+)\.' -or [int]$Matches[1] -lt 22) {
-        throw 'Bundled Node.js runtime is invalid or older than 22.'
+    if ($result.ExitCode -ne 0 -or -not (Test-GoagyNodeVersion $result.Output.Trim())) {
+        throw 'Bundled Node.js runtime is invalid or older than 22.13.'
     }
     return (Resolve-Path -LiteralPath $candidate).Path
 }
@@ -64,11 +64,11 @@ function Get-GoagyNode {
     $candidate = Resolve-GoagyCommand 'node.exe'
     if ($candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) {
         try { $result = Invoke-GoagyCommand $candidate @('--version') } catch { $result = $null }
-        if ($result -and $result.ExitCode -eq 0 -and $result.Output.Trim() -match '^v(\d+)\.' -and [int]$Matches[1] -ge 22) {
+        if ($result -and $result.ExitCode -eq 0 -and (Test-GoagyNodeVersion $result.Output.Trim())) {
             return (Resolve-Path -LiteralPath $candidate).Path
         }
     }
-    throw 'Node.js 22+ is required. Install Node.js with npm and add node.exe to PATH.'
+    throw 'Node.js 22.13+ is required. Install Node.js with npm and add node.exe to PATH.'
 }
 
 function Get-GoagyNpmCli {
@@ -82,7 +82,7 @@ function Get-GoagyNpmCli {
         $cli = Join-Path $directory 'node_modules/npm/bin/npm-cli.js'
         if (Test-Path -LiteralPath $cli -PathType Leaf) { return $cli }
     }
-    throw 'npm is required to install backend dependencies. Install Node.js 22+ with npm and retry.'
+    throw 'npm is required to install backend dependencies. Install Node.js 22.13+ with npm and retry.'
 }
 
 function Initialize-GoagyBackend {
@@ -112,6 +112,14 @@ function Initialize-GoagyBackend {
         if ($checked.ExitCode -ne 0) { throw 'Backend dependency verification failed after npm ci; desktop was not started.' }
         Set-Content -LiteralPath $stamp -Value $fingerprint -Encoding ASCII
     }
+}
+
+function Test-GoagyNodeVersion {
+    param([string]$Version)
+    if ($Version -notmatch '^v(\d+\.\d+\.\d+)$') { return $false }
+    $number = [version]$Matches[1]
+    if ($number.Major -eq 22) { return $number -ge [version]'22.13.0' }
+    return $number -ge [version]'23.4.0'
 }
 
 function Initialize-GoagyPython {
@@ -163,8 +171,23 @@ function Initialize-GoagyPython {
     return $python
 }
 
+function Wait-GoagyWindowReady {
+    param([object]$Process, [string]$ReadyPath, [int]$TimeoutSeconds)
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    while (-not (Test-Path -LiteralPath $ReadyPath -PathType Leaf)) {
+        if ($Process.HasExited) {
+            throw "Desktop window exited before readiness handshake (exit code $($Process.ExitCode))."
+        }
+        if ($timer.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
+            throw "Desktop window did not complete readiness handshake within $TimeoutSeconds seconds."
+        }
+        Start-Sleep -Milliseconds 100
+    }
+}
+
 function Invoke-GoagyBootstrap {
-    param([string]$ProjectRoot, [string[]]$AppArguments, [switch]$PrepareOnly)
+    param([string]$ProjectRoot, [string[]]$AppArguments, [switch]$PrepareOnly,
+          [int]$ReadyTimeoutSeconds = 20, [switch]$PassThru)
     $packaged = Test-GoagyPackagedRuntime $ProjectRoot
     if ($packaged) {
         $env:GO_ANTIGRAVITY_PACKAGED = '1'
@@ -202,8 +225,29 @@ function Invoke-GoagyBootstrap {
         $pythonw = Join-Path $ProjectRoot '.venv-qt/Scripts/pythonw.exe'
         if (-not (Test-Path -LiteralPath $pythonw -PathType Leaf)) { throw 'Missing Python windowed launcher in .venv-qt; recreate the environment.' }
     }
-    $launchArgs = @('-B', ('"' + $entry + '"')) + $AppArguments
-    Start-Process -FilePath $pythonw -ArgumentList $launchArgs -WorkingDirectory $ProjectRoot
+    $launchArgs = (@('-B', $entry) + $AppArguments | ForEach-Object { ConvertTo-GoagyArgument $_ }) -join ' '
+    $readyDir = Join-Path ([IO.Path]::GetTempPath()) ('goagy-qt-' + [guid]::NewGuid().ToString('N'))
+    $readyPath = Join-Path $readyDir 'ready'
+    $null = New-Item -ItemType Directory -Path $readyDir
+    $previousReadyPath = $env:GOAGY_QT_READY_FILE
+    $desktop = $null
+    try {
+        $env:GOAGY_QT_READY_FILE = $readyPath
+        $desktop = Start-Process -FilePath $pythonw -ArgumentList $launchArgs -WorkingDirectory $ProjectRoot -PassThru
+        Wait-GoagyWindowReady $desktop $readyPath $ReadyTimeoutSeconds
+        if ($PassThru) { return $desktop }
+    } catch {
+        if ($desktop -and -not $desktop.HasExited) {
+            try { $desktop.Kill() } catch [InvalidOperationException] { if (-not $desktop.HasExited) { throw } }
+        }
+        if ($desktop -and $PassThru) { $desktop.Dispose() }
+        throw
+    } finally {
+        $env:GOAGY_QT_READY_FILE = $previousReadyPath
+        if ($desktop -and -not $PassThru) { $desktop.Dispose() }
+        Remove-Item -LiteralPath $readyPath -ErrorAction SilentlyContinue
+        [IO.Directory]::Delete($readyDir)
+    }
 }
 
 if ($MyInvocation.InvocationName -ne '.') { Invoke-GoagyBootstrap -ProjectRoot $PSScriptRoot -AppArguments $args }

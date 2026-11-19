@@ -1,6 +1,6 @@
 # GitHub 源码发布准备
 
-核对日期：2026-11-18。本说明覆盖 Windows 源码快照和目录型 EXE 发布包；不包含本次实际上传、推送或创建 GitHub Release。
+核对日期为 2026-11-19。本说明覆盖 Windows 源码快照和目录型 EXE 发布包。
 
 ## 当前发布条件
 
@@ -36,7 +36,7 @@ git archive --format=zip --output=../Go-Antigravity-source.zip HEAD
 
 ## 干净环境验证
 
-运行条件为 Windows、Python 3.10+、Node.js 22+（含 npm）；首次安装需要联网。依赖版本由 backend/package-lock.json 和 desktop-qt/requirements.txt 锁定。验证请在不含个人账户或凭据的临时目录执行。首次启动选择系统 Node，不回退旧式便携运行时。发布验证只连接公共包仓库安装测试依赖，不启动真实账户、客户端或公网远程。
+源码验证需要 Windows、Python 3.10+ 和带 npm 的 Node.js。后端和手机会话列表直接加载 `node:sqlite`，因此 Node 22 的最低版本为 22.13.0，Node 23 的最低版本为 23.4.0。CI 使用 22.13.0 和 24.x 执行 SQLite 检查和后端测试，Qt 在一个 Windows 作业中验证。首次安装从公共包仓库读取 backend/package-lock.json 和 desktop-qt/requirements.txt 锁定的依赖。请在不含个人账户或凭据的临时目录执行验证。
 
 ~~~powershell
 npm --prefix backend ci
@@ -44,6 +44,8 @@ npm --prefix backend run verify
 python -m venv .venv-qt
 .\.venv-qt\Scripts\python.exe -m pip install -r desktop-qt/requirements.txt
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap-tests.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-process-tests.ps1
+pwsh -NoProfile -File scripts/package-rules-tests.ps1
 Get-ChildItem desktop-qt/test_*.py | Sort-Object Name | ForEach-Object {
     & .\.venv-qt\Scripts\python.exe -B $_.FullName -v
     if ($LASTEXITCODE -ne 0) { throw "Desktop test failed" }
@@ -55,17 +57,33 @@ CMD 入口 Start-Go-Antigravity.cmd 会检查／准备源码环境；--demo 使�
 
 ## 构建 Windows 发布包
 
-在干净的 Windows 工作目录准备锁定依赖后执行：
+使用 PowerShell 7（`pwsh`）构建并验收发布包。Qt 自带资源的部分路径较长，PowerShell 7 与发布 workflow 使用相同的文件和归档工具。
 
 ~~~powershell
 npm --prefix backend ci
 python -m venv .venv-qt
 .\.venv-qt\Scripts\python.exe -m pip install -r desktop-qt/requirements.txt
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows.ps1 -Clean
+pwsh -NoProfile -File scripts/package-windows.ps1 -Clean
 Get-Content dist/Go-Antigravity-windows-x64/runtime/manifest.json
 ~~~
 
 脚本会生成 `dist/Go-Antigravity-windows-x64/` 和同名 ZIP。包内入口是 `Go-Antigravity.exe`，包内运行时目录是 `runtime/node/` 与 `runtime/python/`；账户、设置和日志默认位于 `%LOCALAPPDATA%\Go-Antigravity`。GitHub Actions 的标签发布流程见 `.github/workflows/release-windows.yml`。
+
+构建后对生成的 ZIP 运行以下命令。脚本解压到临时目录，扫描敏感文件并核对 manifest，然后由包内启动脚本选择 Node 和 Python。在隔离的 `LOCALAPPDATA` 下检查后端模块、SQLite 和数据目录，最后用包内 `pythonw.exe` 打开合成数据演示，等待 Qt 发出窗口就绪信号并正常退出。
+
+~~~powershell
+$package = Resolve-Path dist/Go-Antigravity-windows-x64.zip
+pwsh -NoProfile -File scripts/package-smoke-test.ps1 -PackagePath $package
+if ($LASTEXITCODE -ne 0) { throw 'Package smoke test failed' }
+
+$stage = Resolve-Path dist/Go-Antigravity-windows-x64
+. ./scripts/package-rules.ps1
+$forbidden = @(Get-PackageForbiddenItems $stage)
+if ($forbidden) { $forbidden | Select-Object -ExpandProperty FullName; throw 'Sensitive or temporary files entered the package.' }
+Get-Content (Join-Path $stage 'runtime/manifest.json')
+~~~
+
+GitHub 标签发布先调用 `.github/workflows/verify.yml` 的可复用验证流程。Node 矩阵和桌面 smoke test 全部通过后才构建包，包 smoke test 通过后才上传工件和创建 Release。
 
 ## 无需 TUN 的已验证范围
 
