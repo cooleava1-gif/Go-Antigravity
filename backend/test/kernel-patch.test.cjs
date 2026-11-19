@@ -10,7 +10,20 @@ const vm = require('node:vm');
 const { createRequire } = require('node:module');
 
 // Every tested patcher uses a child_process stub, including all writer fallback paths.
-function loadPatcher(fsOverrides = {}) {
+// Fixtures are created outside the repo, so a run that exits between a test and its cleanup would
+// leave empty directories in %TEMP%; registering them all here keeps repeated runs from accumulating.
+const trackedDirs = new Set();
+function tempDir(prefix) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  trackedDirs.add(dir);
+  return dir;
+}
+process.on('exit', () => {
+  for (const dir of trackedDirs) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* Best effort on exit. */ }
+  }
+});
+function loadPatcher(fsOverrides = {}, execFileStub) {
   const filename = require.resolve('../features/kernel-patch');
   const localRequire = createRequire(filename);
   const module = { exports: {} };
@@ -18,7 +31,7 @@ function loadPatcher(fsOverrides = {}) {
     module, Buffer, process, setTimeout,
     require(name) {
       if (name === 'node:fs') return { ...fs, ...fsOverrides };
-      if (name === 'node:child_process') return { execFile() { throw new Error('process execution forbidden in kernel tests'); } };
+      if (name === 'node:child_process') return { execFile: execFileStub || (() => { throw new Error('process execution forbidden in kernel tests'); }) };
       return localRequire(name);
     }
   };
@@ -28,7 +41,7 @@ function loadPatcher(fsOverrides = {}) {
 
 function setupPatchCase(t, buffer = buildKernel()) {
   const target = place(tempTarget(), buffer);
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'goagy-kernel-home-'));
+  const home = tempDir('goagy-kernel-home-');
   t.after(() => {
     fs.rmSync(target.dir, { recursive: true, force: true });
     fs.rmSync(home, { recursive: true, force: true });
@@ -144,7 +157,7 @@ function buildKernel() {
 }
 
 function tempTarget(name = 'language_server.exe') {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'goagy-kernel-'));
+  const dir = tempDir('goagy-kernel-');
   return { dir, path: path.join(dir, 'bin', name), backupPath: path.join(dir, 'bin', `${name}.bak`) };
 }
 
@@ -159,7 +172,7 @@ function read(target) {
 }
 
 function withHome(run) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'goagy-home-'));
+  const home = tempDir('goagy-home-');
   try { return run(home); } finally { fs.rmSync(home, { recursive: true, force: true }); }
 }
 
@@ -551,7 +564,7 @@ test('a backup from a different build is refused instead of corrupting the kerne
 });
 
 test('inspectKernel reports a missing kernel without throwing', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'goagy-inspect-'));
+  const dir = tempDir('goagy-inspect-');
   try {
     const result = inspectKernel({ targets: [{ id: 'desktop', label: 'x', path: path.join(dir, 'nope.exe'), backupPath: path.join(dir, 'nope.exe.bak') }] });
     assert.strictEqual(result.targets[0].exists, false);
@@ -562,7 +575,7 @@ test('inspectKernel reports a missing kernel without throwing', () => {
 test('applyKernelPatch backs up once, patches, then reports a no-op second run', async () => {
   const target = place(tempTarget(), buildKernel());
   try {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'goagy-home-'));
+    const home = tempDir('goagy-home-');
     // Leave config directories for products the user never ran untouched.
     fs.mkdirSync(path.join(home, '.gemini', 'config'), { recursive: true });
     try {
@@ -1003,24 +1016,53 @@ test('stock failure restores owned state so a retry recovers the original custom
   assertNoTransactionTemps(fixture);
 });
 
-test('rollback failures explicitly report recovery snapshots and never claim completion', async t => {
+test('binary rollback rewrites only the changed ranges and stages no image copy', async t => {
   const fixture = setupPatchCase(t);
+  const original = read(fixture.target);
+  let imageSnapshots = 0;
   const patcher = loadPatcher({
     renameSync(from, to) {
-      if (to === fixture.cliConfig || to === fixture.target.path) throw new Error('injected rename/rollback lock');
+      if (to === fixture.cliConfig) throw new Error('injected config rename failure');
       return fs.renameSync(from, to);
+    },
+    writeFileSync(file, ...args) {
+      if (String(file).startsWith(fixture.target.path + '.goagy-')) imageSnapshots++;
+      return fs.writeFileSync(file, ...args);
     }
   });
   const result = await patcher.applyKernelPatch({ contextMode: '900k' }, { targets: [fixture.target], homeDir: fixture.home });
   assert.strictEqual(result.ok, false, JSON.stringify(result));
-  assert.ok(result.errors.some(message => message.startsWith('回滚 ') && message.includes(fixture.target.path)));
-  assert.ok(result.errors.some(message => message.includes('恢复快照：')));
-  assert.ok(!result.logs.some(line => line.startsWith('[完成]') || line.startsWith('[回滚] 已恢复')));
+  // The failing commit never changed the CLI file, so the only error names it and the rollback is
+  // reported as a completion of the inverse write rather than as a failure of its own.
+  assert.ok(result.errors.some(message => message.includes('injected config rename failure')), JSON.stringify(result.errors));
+  assert.ok(result.logs.some(line => line.startsWith('[回滚] 已恢复')), JSON.stringify(result.logs));
+  assert.ok(!result.logs.some(line => line.startsWith('[完成]')));
+  assert.ok(read(fixture.target).equals(original), 'kernel restored byte for byte from the recorded ranges');
+  assert.strictEqual(imageSnapshots, 0, 'no copy of the kernel image is staged for rollback');
+  assertConfigUnchanged(fixture);
+  assertNoTransactionTemps(fixture);
+});
+
+test('a failed inverse write still leaves an explicit recovery snapshot', async t => {
+  const fixture = setupPatchCase(t);
+  let rollbackArmed = false;
+  const patcher = loadPatcher({
+    renameSync(from, to) {
+      if (to === fixture.cliConfig) { rollbackArmed = true; throw new Error('injected config rename failure'); }
+      return fs.renameSync(from, to);
+    },
+    openSync(file, flags, ...rest) {
+      if (rollbackArmed && String(file) === fixture.target.path && flags === 'r+') throw new Error('injected inverse-write lock');
+      return fs.openSync(file, flags, ...rest);
+    }
+  });
+  const result = await patcher.applyKernelPatch({ contextMode: '900k' }, { targets: [fixture.target], homeDir: fixture.home });
+  assert.strictEqual(result.ok, false, JSON.stringify(result));
+  assert.ok(result.errors.some(message => message.startsWith('回滚 ') && message.includes(fixture.target.path) && message.includes('恢复快照：')));
   const recovery = filesUnder(fixture.target.dir).filter(file => /\.goagy-.*\.tmp$/.test(file));
   assert.strictEqual(recovery.length, 1, 'retain exactly the snapshot needed for explicit manual recovery');
   assert.ok(fs.readFileSync(recovery[0]).equals(buildKernel()));
   assertConfigUnchanged(fixture);
-  assert.deepStrictEqual(filesUnder(fixture.home), [fixture.cliConfig, fixture.config].sort());
 });
 
 test('JSON member surgery handles every position and JSON value type without changing other bytes', () => {
@@ -1374,4 +1416,38 @@ test('optional synthetic artifacts retain exact sizes, hashes and restoration ev
     report.artifacts.push({ file: artifact.name, bytes: readback.length, sha256: createHash('sha256').update(readback).digest('hex') });
   }
   fs.writeFileSync(path.join(root, 'synthetic-artifacts.json'), JSON.stringify(report, null, 2) + '\n');
+});
+
+test('backup compression only runs for an existing backup and never forces a recompress', async (t) => {
+  const calls = [];
+  const patcher = loadPatcher({}, (command, args, options, callback) => { calls.push({ command, args }); callback(null); });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'goagy-compact-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  assert.strictEqual(await patcher.compressBackup(path.join(dir, 'missing.bak')), false);
+  assert.deepStrictEqual(calls, []);
+  const backup = path.join(dir, 'kernel.bak');
+  fs.writeFileSync(backup, 'synthetic');
+  assert.strictEqual(await patcher.compressBackup(backup), true);
+  assert.strictEqual(calls.length, 1);
+  assert.strictEqual(path.basename(calls[0].command).toLowerCase(), 'compact.exe');
+  assert.deepStrictEqual([...calls[0].args], ['/c', '/q', backup]); // args is built in the vm realm
+});
+
+test('a fresh backup is compressed once and a failed compression leaves the patch untouched', async (t) => {
+  const good = loadPatcher({}, (command, args, options, callback) => callback(null));
+  const okCase = setupPatchCase(t);
+  const ok = await good.applyKernelPatch({ promptTier: '3' }, { targets: [okCase.target], homeDir: okCase.home });
+  assert.strictEqual(ok.ok, true);
+  assert.strictEqual(ok.logs.filter(line => line.includes('已为备份启用 NTFS 压缩')).length, 1);
+  const second = await good.applyKernelPatch({ contextMode: '900k' }, { targets: [okCase.target], homeDir: okCase.home });
+  assert.strictEqual(second.ok, true);
+  assert.strictEqual(second.logs.filter(line => line.includes('已为备份启用 NTFS 压缩')).length, 0);
+
+  const failing = loadPatcher({}, (command, args, options, callback) => callback(new Error('compact unavailable')));
+  const badCase = setupPatchCase(t);
+  const result = await failing.applyKernelPatch({ promptTier: '3' }, { targets: [badCase.target], homeDir: badCase.home });
+  assert.strictEqual(result.ok, true);
+  assert.strictEqual(result.errors.length, 0);
+  assert.ok(fs.existsSync(badCase.target.backupPath));
+  assert.strictEqual(result.logs.some(line => line.includes('已为备份启用 NTFS 压缩')), false);
 });

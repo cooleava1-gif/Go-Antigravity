@@ -728,7 +728,15 @@ function stageEntries(entries) {
   for (const entry of entries) {
     try {
       if (!sameBytes(readOptional(entry.file), entry.before)) throw new Error('文件已被外部修改');
-      stageSnapshot(entry, 'rollbackFile', entry.before);
+      // A kernel image is only ever rewritten in place, byte for byte, so the original bytes of the
+      // changed ranges are enough to undo a failed write. Staging a full copy of the image would
+      // double the disk cost of every patch for a recovery path that never needs the whole file;
+      // only entries without a same-size binary rewrite still keep that snapshot.
+      if (entry.binary && entry.before && entry.after && entry.before.length === entry.after.length) {
+        entry.rangeRollback = true;
+      } else {
+        stageSnapshot(entry, 'rollbackFile', entry.before);
+      }
       if (!entry.binary) stageSnapshot(entry, 'stagedFile', entry.after);
     } catch (error) { throw new Error('暂存 ' + entry.file + ' 失败：' + error.message); }
   }
@@ -742,19 +750,50 @@ function commitEntry(entry) {
   if (!sameBytes(readOptional(entry.file), entry.after)) throw new Error('配置写入后回读校验失败：' + entry.file);
 }
 
+function restoreEntry(entry) {
+  if (entry.before === null) {
+    if (readOptional(entry.file) !== null) fs.unlinkSync(entry.file);
+  } else if (entry.rollbackFile) {
+    fs.renameSync(entry.rollbackFile, entry.file);
+  } else {
+    // The inverse of the forward write: only the ranges that differ between the two images.
+    writeChangedRanges(entry.file, entry.after, entry.before);
+  }
+  if (!sameBytes(readOptional(entry.file), entry.before)) throw new Error('回读与本轮原始内容不一致');
+}
+
 function rollbackEntries(entries, errors) {
   for (const entry of [...entries].reverse()) {
     if (!entry.attempted) continue;
     try {
       if (sameBytes(readOptional(entry.file), entry.before)) continue;
-      if (entry.before === null) { if (readOptional(entry.file) !== null) fs.unlinkSync(entry.file); }
-      else fs.renameSync(entry.rollbackFile, entry.file);
-      if (!sameBytes(readOptional(entry.file), entry.before)) throw new Error('回读与本轮原始内容不一致');
+      restoreEntry(entry);
     } catch (error) {
-      entry.keepRecovery = true;
+      // Materialise a recovery copy only when the inverse write itself failed, so the expensive
+      // snapshot exists exactly in the case a human has to repair the file by hand.
+      if (entry.before !== null && !entry.rollbackFile) {
+        try { stageSnapshot(entry, 'rollbackFile', entry.before); } catch { /* Disk full; reported below. */ }
+      }
+      entry.keepRecovery = Boolean(entry.rollbackFile);
       errors.push('回滚 ' + entry.file + ' 失败：' + error.message + '；恢复快照：' + (entry.rollbackFile || '(原文件不存在)'));
     }
   }
+}
+
+// NTFS file compression is transparent on read and typically halves a pristine kernel image, the one
+// large file this tool keeps on disk. Best effort by design: a non-NTFS volume, a locked image or a
+// missing compact.exe must never turn a completed patch into a failure.
+function compressBackup(file) {
+  if (process.platform !== 'win32' || !file || !fs.existsSync(file)) return Promise.resolve(false);
+  const compact = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'compact.exe');
+  return new Promise(resolve => {
+    // Some callers (tests) replace child_process with a thrower; a compression miss must never turn
+    // a completed patch into a rollback.
+    // No /f: NTFS recompresses an uncompressed file anyway, while an already compressed backup is
+    // left alone, so repeated applies cost a metadata call instead of rewriting 194 MB.
+    try { execFile(compact, ['/c', '/q', file], { windowsHide: true, timeout: 30000 }, error => resolve(!error)); }
+    catch { resolve(false); }
+  });
 }
 
 function cleanupEntries(entries, errors) {
@@ -1068,6 +1107,17 @@ async function applyKernelPatchTransaction({ promptTier, contextMode, promptText
       logs.push(...plan.targetLogs);
       if (!plan.changed) logs.push('[跳过] 内核已处于目标状态，无需写入');
     }
+    // Compress every pristine backup once the image is known good: a brand new .bak immediately, an
+    // older one left uncompressed by a previous build on the next successful apply.
+    const freshBackups = new Set(entries
+      .filter(entry => entry.before === null && targets.some(target => target.backupPath === entry.file))
+      .map(entry => entry.file));
+    for (const target of targets) {
+      if (!fs.existsSync(target.backupPath)) continue;
+      if (await compressBackup(target.backupPath) && freshBackups.has(target.backupPath)) {
+        successLogs.push('[完成] 已为备份启用 NTFS 压缩：' + target.backupPath);
+      }
+    }
     logs.push(...successLogs, ...config.logs);
   } catch (error) {
     logs.push(error.message);
@@ -1109,6 +1159,7 @@ module.exports = {
   normalizeContextMode,
   validateCustomPrompt,
   customPromptMetadata,
+  compressBackup,
   resolveTargets,
   parseEmbedTemplates,
   computeActiveBytes,
