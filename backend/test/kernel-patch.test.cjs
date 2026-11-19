@@ -28,7 +28,7 @@ function loadPatcher(fsOverrides = {}, execFileStub) {
   const localRequire = createRequire(filename);
   const module = { exports: {} };
   const context = {
-    module, Buffer, process, setTimeout,
+    module, Buffer, process, setTimeout, __dirname: path.dirname(filename),
     require(name) {
       if (name === 'node:fs') return { ...fs, ...fsOverrides };
       if (name === 'node:child_process') return { execFile: execFileStub || (() => { throw new Error('process execution forbidden in kernel tests'); }) };
@@ -174,6 +174,31 @@ function withHome(run) {
   const home = tempDir('goagy-home-');
   try { return run(home); } finally { fs.rmSync(home, { recursive: true, force: true }); }
 }
+
+test('locked writer stops only the executable it failed to replace', async t => {
+  const fixture = setupPatchCase(t);
+  const calls = [];
+  let locked = true;
+  const patcher = loadPatcher({
+    openSync(file, flags) {
+      if (locked && file === fixture.target.path && flags === 'r+') throw Error('locked');
+      return fs.openSync(file, flags);
+    },
+    renameSync(from, to) {
+      if (locked && from === fixture.target.path) throw Error('locked');
+      fs.renameSync(from, to);
+    }
+  }, (file, args, options, callback) => {
+    if (/compact\.exe$/i.test(file)) return callback(null);
+    calls.push({ file, script: path.basename(args[args.indexOf('-File') + 1]), stop: args.includes('-StopTargets'),
+      paths: JSON.parse(options.env.GOAGY_KERNEL_TARGET_PATHS) });
+    locked = false;
+    callback(null, '1\r\n');
+  });
+  const result = await patcher.applyKernelPatch({ contextMode: '512k' }, { targets: [fixture.target], homeDir: fixture.home });
+  assert.equal(result.ok, true, result.errors.join('\n'));
+  assert.deepStrictEqual(calls, [{ file: 'powershell.exe', script: 'kernel-processes.ps1', stop: true, paths: [fixture.target.path] }]);
+});
 
 test('tier and mode normalisation accepts the documented spellings and rejects junk', () => {
   for (const value of ['0', 'restore', 'stock', 'reset', undefined, null, '']) {

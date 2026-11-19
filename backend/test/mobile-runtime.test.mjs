@@ -41,7 +41,7 @@ test('fixed URL and mode validation reject unsafe configuration',()=>{
 test('CLI ordering isolates quick config and keeps fixed run after all tunnel flags',()=>{
  const quick=buildCloudflaredArgs({mode:'quick'}); assert.equal(quick[0],'tunnel');assert.equal(quick[1],'--config');assert.match(quick[2],/quick-config.yml$/);assert.ok(quick.includes(LOCAL_URL));assert.equal(quick.includes('run'),false);
  assert.deepEqual(buildCloudflaredArgs({mode:'fixed',config:'/external/tunnel.yml'}),['tunnel','--config','/external/tunnel.yml','--metrics','127.0.0.1:20382','--no-autoupdate','--protocol','http2','run']);
- assert.deepEqual(cloudflaredEnvironment({PATH:'bin',TUNNEL_CONFIG:'secret',TUNNEL_TOKEN:'secret',CF_TUNNEL:'secret',GOAGY_POCKET_PIN:'12345678'},'quick'),{PATH:'bin',GOAGY_POCKET_PIN:'12345678'});
+ assert.deepEqual(cloudflaredEnvironment({PATH:'bin',TUNNEL_CONFIG:'secret',TUNNEL_TOKEN:'secret',CF_TUNNEL:'secret',GOAGY_POCKET_PIN:'12345678'},'quick'),{PATH:'bin'});
 });
 test('external named configuration cannot live inside the repository',async()=>{
  await assert.rejects(validateExternalConfig(new URL('../mobile/quick-config.yml',import.meta.url)),/FIXED_CONFIG_REQUIRED/);

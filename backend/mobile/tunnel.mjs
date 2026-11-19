@@ -56,9 +56,10 @@ export function buildCloudflaredArgs(options) {
     : ['tunnel', '--config', join(runtimeDir, 'quick-config.yml'), '--url', LOCAL_URL, ...common];
 }
 export function cloudflaredEnvironment(env, mode) {
-  // Connector transports must not inherit loopback interception proxies. Keep named credentials.
+  // Connector transports must not inherit loopback interception proxies or the mobile server PIN.
   return Object.fromEntries(Object.entries(env).filter(([key]) =>
     !/^(?:https?|all|no)_proxy$/i.test(key) &&
+    !/^GOAGY_POCKET_/i.test(key) &&
     (mode === 'fixed' || !/^(?:TUNNEL_|CF_TUNNEL|CLOUDFLARED_)/i.test(key))));
 }
 export function originEnvironment(env) {

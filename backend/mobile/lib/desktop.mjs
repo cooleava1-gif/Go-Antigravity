@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { stat, readdir } from 'node:fs/promises';
@@ -9,6 +10,8 @@ const exec = promisify(execFile);
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export class PocketError extends Error { constructor(message,status=503){super(message);this.status=status;} }
 export function checkId(id){if(!UUID.test(id))throw new PocketError('会话 ID 无效',400);return id;}
+const discoveryScript = fileURLToPath(new URL('./windows-desktop-processes.ps1', import.meta.url));
+
 const running=s=>/RUNNING|PENDING|IN_PROGRESS|CANCELLING/.test(s||'');
 export function state(s){return running(s)?'running':/ERROR|FAILED/.test(s||'')?'error':'idle';}
 function textOf(v,depth=0){
@@ -27,21 +30,37 @@ export function mapSteps(steps,offset=0){return steps.flatMap((s,i)=>{
 });}
 function parseWorkspace(value){try{return JSON.parse(value||'[]').map(s=>decodeURI(s)).join(', ');}catch{return value||'';}}
 export class DesktopAdapter {
- constructor(config={}){this.config=config;this.home=config.home||join(homedir(),'.gemini','antigravity');this.endpoint=null;this.discovery=null;this.checkedAt=0;this.requests=new Map();}
+ constructor({ home, platform = process.platform, execute = exec, fetch: fetcher = fetch } = {}) {
+  this.home = home || join(homedir(), '.gemini', 'antigravity');
+  this.platform = platform;
+  this.execute = execute;
+  this.fetcher = fetcher;
+  this.endpoint = null;
+  this.discovery = null;
+  this.checkedAt = 0;
+  this.requests = new Map();
+ }
  async discover(force=false){
   if(!force&&this.endpoint&&Date.now()-this.checkedAt<15000)return this.endpoint;
   if(this.discovery)return this.discovery;
   this.discovery=(async()=>{
-   if(process.platform!=='win32')throw new PocketError('当前自动发现支持 Windows 桌面端');
-   const script='$p=Get-CimInstance Win32_Process | Where-Object {$_.Name -eq "language_server.exe"}; @($p | ForEach-Object {$q=$_; [PSCustomObject]@{pid=$q.ProcessId;exe=$q.ExecutablePath;cmd=$q.CommandLine;ports=@(Get-NetTCPConnection -State Listen -OwningProcess $q.ProcessId -ErrorAction SilentlyContinue | Select-Object -ExpandProperty LocalPort)}}) | ConvertTo-Json -Compress';
-   const {stdout}=await exec('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{windowsHide:true,timeout:15000,maxBuffer:1024*1024});
-   const rows=[].concat(JSON.parse(stdout||'[]')||[]);
-   const matches=[];
-   for(const row of rows){
-    if(!/[/\\]antigravity[/\\]/i.test(row.exe||'')||/antigravity-cli/.test(row.cmd||''))continue;
-    const m=row.cmd.match(/--?csrf_token(?:=|\s+)(?:"([^"]+)"|([^\s]+))/);const token=m?.[1]||m?.[2];if(!token)continue;
-    for(const port of row.ports||[]){try{
-     const base='http://127.0.0.1:'+Number(port);const r=await fetch(base+'/healthz',{signal:AbortSignal.timeout(800)});if(!r.ok)continue;
+   if (this.platform !== 'win32') throw new PocketError('当前自动发现支持 Windows 桌面端');
+   this.endpoint = null;
+   const { stdout } = await this.execute('powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', discoveryScript],
+    { windowsHide: true, timeout: 15000, maxBuffer: 1024 * 1024 });
+   const rows = JSON.parse(stdout.trim() || '[]');
+   const matches = [];
+   for (const row of rows) {
+    if (!Number.isSafeInteger(row.pid) || row.pid <= 0 || !/[/\\]antigravity[/\\]/i.test(row.exe || '') ||
+        typeof row.cmd !== 'string' || /antigravity-cli/i.test(row.cmd)) continue;
+    const match = row.cmd.match(/(?:^|\s)--?csrf_token(?:=|\s+)(?:"([^"]+)"|([^\s"]+))/);
+    const token = match?.[1] || match?.[2];
+    if (!token) continue;
+    for (const port of new Set(row.ports)) { try {
+     if (!Number.isInteger(port) || port < 1 || port > 65535) continue;
+     const base = 'http://127.0.0.1:' + port;
+     if (!(await this.fetcher(base + '/healthz', { signal: AbortSignal.timeout(800) })).ok) continue;
      const endpoint={base,token,pid:row.pid,exe:row.exe};
      const test=await this.rpcAt(endpoint,'GetAllCascadeTrajectories',{});if(test&&typeof test==='object')matches.push(endpoint);
     }catch{}}
@@ -53,7 +72,7 @@ export class DesktopAdapter {
   try{return await this.discovery;}finally{this.discovery=null;}
  }
  async rpcAt(ep,method,body){
-  const r=await fetch(ep.base+'/exa.language_server_pb.LanguageServerService/'+method,{method:'POST',headers:{'content-type':'application/json','x-codeium-csrf-token':ep.token},body:JSON.stringify(body),signal:AbortSignal.timeout(20000)});
+  const r=await this.fetcher(ep.base+'/exa.language_server_pb.LanguageServerService/'+method,{method:'POST',headers:{'content-type':'application/json','x-codeium-csrf-token':ep.token},body:JSON.stringify(body),signal:AbortSignal.timeout(20000)});
   if(!r.ok)throw new PocketError('桌面接口请求失败（'+r.status+'）',502);
   return await r.json();
  }

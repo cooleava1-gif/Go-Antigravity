@@ -92,8 +92,8 @@ test('native public deadline includes DNS/TLS and Stop destroys a pending reques
 });
 test('both connector modes remove all proxy spellings while fixed credentials stay isolated', () => {
   const env = { PATH: 'bin', HTTP_PROXY: 'secret', https_proxy: 'secret', ALL_PROXY: 'secret', No_Proxy: 'secret', TUNNEL_TOKEN: 'named', GOAGY_POCKET_PIN: '12345678' };
-  assert.deepEqual(cloudflaredEnvironment(env, 'quick'), { PATH: 'bin', GOAGY_POCKET_PIN: '12345678' });
-  assert.deepEqual(cloudflaredEnvironment(env, 'fixed'), { PATH: 'bin', TUNNEL_TOKEN: 'named', GOAGY_POCKET_PIN: '12345678' });
+  assert.deepEqual(cloudflaredEnvironment(env, 'quick'), { PATH: 'bin' });
+  assert.deepEqual(cloudflaredEnvironment(env, 'fixed'), { PATH: 'bin', TUNNEL_TOKEN: 'named' });
   assert.equal(env.HTTP_PROXY, 'secret');
 });
 test('HTTP2 healthy cold start has no fallback wait and URL chunks trigger readiness immediately', async t => {
@@ -193,12 +193,14 @@ test('named token precedes external YAML and only connector environment contains
   const f = fixture({ env, checkConfig: async () => { configReads++; throw Error(token); } }); t.after(() => f.supervisor.stop());
   await f.begin(); await f.pending; assert.equal(configReads, 0);
   const origin = f.calls[0].options.env;
+  assert.equal(origin.GOAGY_POCKET_PIN, env.GOAGY_POCKET_PIN);
   for (const key of ['TUNNEL_TOKEN', 'CF_TUNNEL_TOKEN', 'GOAGY_POCKET_CF_CONFIG']) assert.equal(origin[key], undefined);
   assert.equal(f.calls[1].options.env.TUNNEL_TOKEN, token); assert.equal(f.calls[1].options.env.CF_TUNNEL_TOKEN, undefined);
   assert.equal(f.calls[1].options.env.HTTPS_PROXY, undefined);
   f.edge = false; await until(() => f.children.length === 3); f.edge = true;
   await until(() => f.records.filter(record => record.tunnelReady).length === 2);
   assert.equal(f.calls[2].options.env.TUNNEL_TOKEN, token); assert.equal(f.children[0].kills.length, 0);
+  for (const call of f.calls.slice(1)) assert.ok(Object.keys(call.options.env).every(key => !/^GOAGY_POCKET_/i.test(key)));
   assert.doesNotMatch(JSON.stringify(f.records) + JSON.stringify(f.calls.map(call => call.args)), /synthetic-cloudflare-token|inherited-other|private-proxy/);
 });
 test('invalid named token fails before origin spawn with a sanitized protocol error', async () => {

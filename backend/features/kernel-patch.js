@@ -821,20 +821,25 @@ function writeChangedRanges(file, oldBuffer, newBuffer) {
   }
 }
 
-function taskkill(imageName) {
-  return new Promise(resolve => {
-    execFile('taskkill.exe', ['/F', '/IM', imageName], { windowsHide: true }, () => resolve());
+// Pass paths as data, including portable installations with spaces or quotes in the directory.
+function kernelProcessCount(paths, stop = false) {
+  const script = path.join(__dirname, 'kernel-processes.ps1');
+  const args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script];
+  if (stop) args.push('-StopTargets');
+  return new Promise((resolve, reject) => {
+    execFile('powershell.exe', args, {
+      windowsHide: true, timeout: 15000,
+      env: { ...process.env, GOAGY_KERNEL_TARGET_PATHS: JSON.stringify(paths) }
+    }, (error, stdout) => {
+      if (error || !/^\d+$/.test(String(stdout).trim())) {
+        reject(new Error('无法确认或关闭此用户的目标内核，请手动退出 Antigravity 后重试'));
+      } else resolve(Number(stdout));
+    });
   });
 }
 
-function languageServerRunning() {
-  return new Promise(resolve => {
-    execFile('tasklist.exe', ['/NH', '/FO', 'CSV'], { windowsHide: true, timeout: 5000 }, (error, stdout) => {
-      if (error) return resolve(false);
-      const text = String(stdout || '').toLowerCase();
-      resolve(text.includes('"language_server.exe"') || text.includes('"language_server_windows_x64.exe"'));
-    });
-  });
+async function languageServerRunning() {
+  return (await kernelProcessCount(resolveTargets().map(target => target.path))) > 0;
 }
 
 // Windows lets a running .exe be renamed inside its own directory, so a patched kernel can be put
@@ -861,8 +866,7 @@ async function writeBinaryWithUnlock(file, oldBuffer, newBuffer) {
     } catch { /* Rename blocked too (leftover .old_run still held): fall through to the kill path. */ }
   }
 
-  await taskkill('language_server.exe');
-  await taskkill('language_server_windows_x64.exe');
+  await kernelProcessCount([file], true);
   for (const wait of [40, 80, 150]) {
     await new Promise(resolve => setTimeout(resolve, wait));
     try { fs.unlinkSync(stale); } catch { /* Still held; the next attempt may succeed. */ }
@@ -1100,11 +1104,9 @@ async function applyKernelPatchTransaction({ promptTier, contextMode } = {}, opt
 }
 
 async function killLanguageServers() {
-  const before = await languageServerRunning();
-  await taskkill('language_server.exe');
-  await taskkill('language_server_windows_x64.exe');
-  const running = before ? await languageServerRunning() : false;
-  return { wasRunning: before, stillRunning: running };
+  const paths = resolveTargets().map(target => target.path);
+  const wasRunning = (await kernelProcessCount(paths, true)) > 0;
+  return { wasRunning, stillRunning: wasRunning && (await kernelProcessCount(paths)) > 0 };
 }
 
 module.exports = {
