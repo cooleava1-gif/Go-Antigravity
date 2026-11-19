@@ -26,26 +26,26 @@ Token 加密保存在本机用户数据目录的 `mobile-vault.json`，沿用本
 
 ## 生命周期与认证
 
-“停止”只清理本次 EasyAG 创建的手机服务与隧道进程树，不结束 Antigravity。默认关闭“随 AGY 启动”；开启后随 EasyAG 的 AG 启动/附加生命周期启动，AG 退出时停止该自动实例。手动实例持续运行到手动停止或退出 EasyAG。这不是 Windows 开机自启。
+“停止”只清理本次 Go-Antigravity 创建的手机服务与隧道进程树，不结束 Antigravity。默认关闭“随 AGY 启动”；开启后随 Go-Antigravity 的 AG 启动/附加生命周期启动，AG 退出时停止该自动实例。手动实例持续运行到手动停止或退出 Go-Antigravity。这不是 Windows 开机自启。
 
 当前原生界面没有托盘保活。关闭主窗口会退出本次启动的后端并清理其托管手机服务；如果桌面复用了原有外部后端，该服务继续运行。手机页面刷新不会停止服务。电脑需联网、不休眠，Antigravity 桌面端需保持可用。
 
-PIN 仅保存在当前进程与受保护的本地页面内存中，不写入设置、日志、网址或二维码；每次启动生成新 PIN。访问受保护接口必须先登录。EasyAG 本地接口继续使用会话令牌和跨站写入保护。
+PIN 仅保存在当前进程与受保护的本地页面内存中，不写入设置、日志、网址或二维码；每次启动生成新 PIN。访问受保护接口必须先登录。Go-Antigravity 本地接口继续使用会话令牌和跨站写入保护。
 
 首次启动最多约 125 秒，优先使用 HTTP/2，连接停滞时在同一预算内尝试备用协议。公网入口通过验证后才显示二维码；DNS 传播等待不会反复重启已经连接的隧道。运行中每 5 秒检查健康状态，连接器异常时最多自动重建两次，连续健康 10 分钟后重置恢复预算；停止会取消探测与恢复。自动重建保留本地服务和当前 PIN，随机公网地址可能改变，请使用恢复后的最新二维码。公网验证通过仍不保证所有手机网络都能访问。
 
-检测到端口已被独立服务占用时显示“外部服务运行中”；EasyAG 不接管、不停止外部服务，也不知道其 PIN。正常清理只针对记录的子进程 PID，不按进程名或端口批量终止。系统断电、强制结束或父进程崩溃仍可能遗留外部进程，需在原启动位置处理。
+检测到端口已被独立服务占用时显示“外部服务运行中”；Go-Antigravity 不接管、不停止外部服务，也不知道其 PIN。正常清理只针对记录的子进程 PID，不按进程名或端口批量终止。系统断电、强制结束或父进程崩溃仍可能遗留外部进程，需在原启动位置处理。
 
 ## 可移植配置
 
-默认运行时位于 backend/mobile，通过当前 EasyAG Node 运行，不依赖 DSH 或某台电脑的绝对路径。通常无需设置下列环境变量：
+默认运行时位于 backend/mobile，通过当前 Go-Antigravity Node 运行，不依赖 DSH 或某台电脑的绝对路径。通常无需设置下列环境变量：
 
 - AGY_CLOUDFLARED：cloudflared 可执行文件路径；未设置时尝试标准安装位置及 PATH。
 - AGY_POCKET_CF_CONFIG：高级兼容用的外部本机隧道配置路径；已存 Token 优先，Token 表单和随机模式都无需设置。
 - AGY_POCKET_PROJECT：可选手机运行时目录，需同时包含 tunnel.mjs 与 server.mjs。
 - AGY_POCKET_NODE：可选兼容 Node 可执行文件；未来非 Node 宿主必须显式设置。
 
-普通设置保存在 EasyAG 用户数据目录的 settings.json：mobileAutoStart、mobileMode、mobileFixedUrl。该文件不包含 PIN、动态公网地址或隧道凭据；Token 使用单独的加密记录。配置环境变量后请完全退出并重新打开 EasyAG。
+普通设置保存在 Go-Antigravity 用户数据目录的 settings.json：mobileAutoStart、mobileMode、mobileFixedUrl。该文件不包含 PIN、动态公网地址或隧道凭据；Token 使用单独的加密记录。配置环境变量后请完全退出并重新打开 Go-Antigravity。
 
 ## 源码分发与维护
 

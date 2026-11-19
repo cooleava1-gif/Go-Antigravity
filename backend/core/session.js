@@ -20,7 +20,7 @@ class Session {
   }
 
   async launch() {
-    if (this.closed) return { ok: false, error: 'EasyAG 正在退出' };
+    if (this.closed) return { ok: false, error: 'Go-Antigravity 正在退出' };
     if (this.phase === 'running') return { ok: true, alreadyRunning: true };
     if (this.finishing || this.phase === 'preparing' || this.phase === 'launching') return { ok: false, error: '正在启动，请稍候' };
     const generation = ++this.generation;
@@ -28,7 +28,7 @@ class Session {
     try {
       const target = this.desktop.locate();
       if (!target.exists) throw new Error('未找到 Antigravity: ' + target.appExe);
-      if (await this.desktop.running()) throw new Error('请先退出已打开的 AG，再通过 EasyAG 启动以接入代理环境');
+      if (await this.desktop.running()) throw new Error('请先退出已打开的 AG，再通过 Go-Antigravity 启动以接入代理环境');
       if (this.closed || generation !== this.generation) throw new Error('启动已取消');
       const settings = this.settings.get();
       this.change('launching');

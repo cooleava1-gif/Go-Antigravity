@@ -65,7 +65,7 @@ function createAgLogWatcher({
     // The exit is the cause, so it goes on its own line rather than at the end of a sentence.
     const egress = describeEgress();
     if (egress) events.log('PROXY', egress, 'tag-warn');
-    events.log('PROXY', '这与 EasyAG 无关，也不需要重装：把代理节点换到 Google 受支持的地区（美、日等）再重试', 'tag-warn');
+    events.log('PROXY', '这与 Go-Antigravity 无关，也不需要重装：把代理节点换到 Google 受支持的地区（美、日等）再重试', 'tag-warn');
   }
 
   function scan() {

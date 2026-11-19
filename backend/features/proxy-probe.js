@@ -34,7 +34,7 @@ const GEO_GATE = 'User location is not supported';
 const DEFAULT_TIMEOUT_MS = 8000;
 const PORT_TIMEOUT_MS = 2000;
 const MAX_BODY_BYTES = 256 * 1024;
-const USER_AGENT = 'EasyAntigravity/4.0 (proxy-preflight)';
+const USER_AGENT = 'Go-Antigravity (proxy-preflight)';
 
 // Failure codes. `ok` and `geo-blocked` are the two outcomes that depend on Google's answer;
 // everything else means the proxy itself never delivered a request.
@@ -54,7 +54,7 @@ function portLabel(port) {
 function adviceFor(code, port) {
   switch (code) {
     case CODES.PROXY_DOWN:
-      return `请先启动代理客户端，并把 EasyAG 设置里的代理端口改成实际端口（当前按 ${portLabel(port)} 探测）`;
+      return `请先启动代理客户端，并把 Go-Antigravity 设置里的代理端口改成实际端口（当前按 ${portLabel(port)} 探测）`;
     case CODES.PROXY_REJECTED:
       return '代理收到了请求但拒绝转发：检查代理的规则模式/系统代理开关，或更换节点';
     case CODES.TIMEOUT:
@@ -529,7 +529,7 @@ async function probeProxy({
     return result({
       ok: false, code: CODES.PROXY_DOWN, status: null, ms: 0,
       message: `代理端口无效：${port}`,
-      advice: '请在 EasyAG 设置里填写 1–65535 之间的端口',
+      advice: '请在 Go-Antigravity 设置里填写 1–65535 之间的端口',
       error: null
     }, port, timeoutMs);
   }

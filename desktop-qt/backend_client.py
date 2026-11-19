@@ -1,4 +1,4 @@
-"""Asynchronous Qt client for the existing loopback-only EasyAntigravity API."""
+"""Asynchronous Qt client for the existing loopback-only Go-Antigravity API."""
 from __future__ import annotations
 
 import json

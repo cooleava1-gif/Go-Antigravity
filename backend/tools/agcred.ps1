@@ -1,4 +1,4 @@
-# EasyAG helper: read/write the Antigravity system credential in Windows Credential Manager.
+# Go-Antigravity helper: read/write the Antigravity system credential in Windows Credential Manager.
 # AG >= 2.0 keeps its IDE login in a generic credential named "gemini:antigravity".
 # Usage:
 #   agcred.ps1 -Mode read            -> prints base64 of the stored secret (empty if absent)
