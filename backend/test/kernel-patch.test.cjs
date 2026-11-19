@@ -1180,6 +1180,20 @@ test('legacy payload fingerprints are frozen independently of current payload up
   }
 });
 
+test('current payload fingerprints are frozen so editorial edits stay deliberate', () => {
+  const { createHash } = require('node:crypto');
+  const payloads = require('../features/kernel-prompt-payloads.json');
+  // v2 payloads are short enough that a same-length typo could still pass the budget and phrase
+  // assertions above, so the exact bytes are pinned as well.
+  const hashes = {
+    tier3: '41ab8c0b50736f166537247dac2d345a0316b225129bccba18ddedf8feedc2fc',
+    tier4: '9abbfdd3a22745f4e74a83394572ff34b49d55ee243c6b44ca42f15cf665d25e'
+  };
+  for (const [key, expected] of Object.entries(hashes)) {
+    assert.strictEqual(createHash('sha256').update(JSON.stringify(payloads.tiers[key])).digest('hex'), expected, key);
+  }
+});
+
 test('new tiers fit measured UTF-8 budgets and retain essential evidence and tool rules', () => {
   const groups = require('../features/kernel-prompt-payloads.json').tiers;
   const budgets = { tier3: [459, 405, 1250], tier4: [614, 566, 2222] };
