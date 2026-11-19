@@ -18,7 +18,7 @@ C:\Users\97218\tools\Go-Antigravity-public
 | 桌面启动与本地服务 | `desktop-qt/main.py`、`runtime.py`、`backend_client.py` | 启动窗口、连接本地后端、生命周期管理 |
 | 账户、设置、凭据 | `backend/core/` | 本地数据、账户、配额、加密存储和日志 |
 | 后端 API | `backend/desktop/application.js`、`backend/desktop/api.js` | 桌面调用的本地接口和状态流 |
-| 内核补丁 | `backend/features/kernel-patch.js`、`kernel-custom-prompt.js`、`kernel-prompt-payloads.json` | 上下文、系统提示词、备份和恢复 |
+| 内核补丁 | `backend/features/kernel-patch.js`、`kernel-prompt-payloads.json` | 上下文、系统提示词、备份和恢复 |
 | 代理与 Token | `backend/features/proxy.js`、`proxy-probe.js`、`backend/core/agoauth.js` | 代理预检、授权和刷新 |
 | 手机远程 | `backend/mobile/`、`backend/features/mobile-access.js` | 手机网页、隧道和服务控制 |
 | 启动脚本 | `Start-Go-Antigravity.ps1`、`Start-Go-Antigravity.cmd` | 源码模式和发布包模式的启动入口 |

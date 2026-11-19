@@ -1,7 +1,6 @@
 """Go-Antigravity native desktop workspace (Orderly Horizontal Liquid Glass v2)."""
 from __future__ import annotations
 
-import hashlib
 import html
 import json
 import re
@@ -15,7 +14,7 @@ from PyQt6.QtCore import (
 )
 from PyQt6.QtGui import QDesktopServices, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
-    QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame,
+    QApplication, QButtonGroup, QCheckBox, QComboBox, QFrame,
     QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
     QPushButton, QScrollArea, QSpinBox, QStackedWidget, QTextEdit, QVBoxLayout,
     QWidget, QGraphicsOpacityEffect,
@@ -107,11 +106,10 @@ class MainWindow(QMainWindow):
         "2": "旧 2 档：仅保留兼容识别。请主动选择新版，或恢复官方原版。",
         "3": "精简·防编造：保留辅助模板，用更短的核心规则约束证据、工具调用与结果核验。",
         "4": "旧 4 档：仅保留兼容识别。请主动选择新版，或恢复官方原版。",
-        "custom": "自定义仅替换 3 个 CORE_SLOTS（核心指令层）；identity、工具声明、全部辅助模板与 applyEdits 绕过保持不变。",
     }
-    VISIBLE_TIERS = ("stock", "3", "custom")
-    DEFAULT_CUSTOM_CAPACITY = 3960
-    API_BODY_LIMIT = 64 * 1024
+    # Only two tiers stay selectable. Tier "custom" still exists in the backend vocabulary for
+    # recognising kernels patched by an older build, but it is never offered here.
+    VISIBLE_TIERS = ("stock", "3")
 
     CTX_HINTS = {
         "stock": "沿用当前客户端的默认上限；所有受支持模型实际上都支持 1M 上下文。",
@@ -139,9 +137,6 @@ class MainWindow(QMainWindow):
         self._page_effects: list[QGraphicsOpacityEffect] = []
         self._qr_url = ""
         self._clear_tunnel_token = False
-        self._custom_prompt_draft = ""
-        self._custom_capacity = self.DEFAULT_CUSTOM_CAPACITY
-        self._custom_prompt_meta: dict = {}
 
         self.settings = QSettings("Go-Antigravity", "Desktop")
         self.dark = True if demo else self.settings.value("dark", True, type=bool)
@@ -153,6 +148,10 @@ class MainWindow(QMainWindow):
         self.resize(1120, 640)
 
         self._build()
+        # Building the widgets selects their default segments, which marks "kernel" dirty through the
+        # ordinary change handlers. Nothing the user did has happened yet, so the marks are cleared —
+        # otherwise the first render_status() would skip syncing the controls to the saved backend state.
+        self._dirty.clear()
         self.set_dark(self.dark, persist=False)
 
         QShortcut(QKeySequence("Ctrl+R"), self, activated=self.refresh)
@@ -441,20 +440,13 @@ class MainWindow(QMainWindow):
         for text, key, tip in [
             ("官方原版", "stock", self.TIER_HINTS["stock"]),
             ("精简·防编造", "3", self.TIER_HINTS["3"]),
-            ("自定义上传", "custom", self.TIER_HINTS["custom"]),
         ]:
             self.tier.addItem(text, key, tip)
         self.tier.currentIndexChanged.connect(self._on_tier_changed)
         kl.addWidget(self.tier)
         self.tier_hint_label = label(self.TIER_HINTS["3"], "Small", True)
         kl.addWidget(self.tier_hint_label)
-        self.custom_prompt_button = self.button("编辑 / 上传自定义提示词", self.open_custom_prompt_dialog)
-        self.custom_prompt_button.setAccessibleName("自定义提示词编辑器")
-        kl.addWidget(self.custom_prompt_button)
-        self.custom_prompt_status_label = label("自定义提示词：尚无已保存文本 · 草稿 0 B / 3960 B · API 请求上限 64 KiB", "Small", True)
-        kl.addWidget(self.custom_prompt_status_label)
         self.tier.setCurrentIndex(self.tier.findData("3"))
-        self._refresh_custom_prompt_labels()
 
         # Context Window Segmented Control + Underneath Description
         kl.addWidget(label("上下文窗口上限", "Sub"))
@@ -1113,187 +1105,6 @@ class MainWindow(QMainWindow):
         self.context_hint_label.setText(self.CTX_HINTS.get(key, ""))
         self._update_dirty_badges()
 
-    def _custom_prompt_status_text(self) -> str:
-        meta = self._custom_prompt_meta if isinstance(self._custom_prompt_meta, dict) else {}
-        available = bool(meta.get("available"))
-        saved_bytes = meta.get("bytes") or 0
-        saved_hash = str(meta.get("hash") or "")
-        updated = meta.get("updatedAt")
-        if available:
-            backend = (
-                f"已保存 {saved_bytes} B · SHA256 {saved_hash or '—'}"
-                f" · 更新于 {'—' if updated is None else updated} · 仅元数据，不返回全文"
-            )
-        else:
-            backend = "尚无已保存文本 · 仅元数据，不返回全文"
-        draft = self._custom_prompt_draft or ""
-        draft_bytes = len(draft.encode("utf-8", "replace"))
-        fingerprint = hashlib.sha256(draft.encode("utf-8", "replace")).hexdigest()[:12] if draft else "—"
-        return (
-            f"自定义提示词：{backend} · 本地草稿 {draft_bytes} B / {self._custom_capacity} B"
-            f" · 本地指纹 {fingerprint} · API 请求上限 64 KiB"
-        )
-
-    def _refresh_custom_prompt_labels(self) -> None:
-        if hasattr(self, "custom_prompt_status_label"):
-            self.custom_prompt_status_label.setText(self._custom_prompt_status_text())
-        if hasattr(self, "custom_prompt_editor"):
-            self._on_custom_prompt_editor_changed()
-
-    def _update_custom_prompt_metadata(self, meta) -> None:
-        if isinstance(meta, dict):
-            self._custom_prompt_meta = dict(meta)
-            try:
-                capacity = int(meta.get("capacity") or self.DEFAULT_CUSTOM_CAPACITY)
-            except (TypeError, ValueError):
-                capacity = self.DEFAULT_CUSTOM_CAPACITY
-            self._custom_capacity = capacity if capacity > 0 else self.DEFAULT_CUSTOM_CAPACITY
-        else:
-            self._custom_prompt_meta = {}
-            self._custom_capacity = self.DEFAULT_CUSTOM_CAPACITY
-        self._refresh_custom_prompt_labels()
-
-    def validate_custom_prompt(self, text) -> tuple[bool, str]:
-        """Validate raw UTF-8 custom text without truncating or rewriting it."""
-        if isinstance(text, (bytes, bytearray)):
-            try:
-                text = bytes(text).decode("utf-8-sig")
-            except UnicodeDecodeError:
-                return False, "自定义提示词必须是有效的 UTF-8 或 UTF-8-BOM 文本。"
-        if not isinstance(text, str):
-            return False, "自定义提示词必须是文本。"
-        if not text or not text.strip():
-            return False, "自定义提示词不能为空。"
-        if "\x00" in text:
-            return False, "自定义提示词不能包含 NUL 字符。"
-        go_markers = ("{{", "}}", "{{- /*", "*/ -}}")
-        if any(marker in text for marker in go_markers):
-            return False, "自定义提示词不能包含 Go 模板定界符 {{ 或 }}（包括 {{- /* 与 */ -}}）。"
-        try:
-            size = len(text.encode("utf-8"))
-        except UnicodeEncodeError:
-            return False, "自定义提示词必须是有效的 UTF-8 文本。"
-        if size > self._custom_capacity:
-            return False, f"自定义提示词为 {size} B，超出 {self._custom_capacity} B 文本容量；不会截断，请精简后重试。"
-        if size > self.API_BODY_LIMIT:
-            return False, f"自定义提示词为 {size} B，超出 64 KiB API 请求上限；不会截断，请精简后重试。"
-        return True, ""
-
-    @staticmethod
-    def _read_custom_prompt_file(path: str) -> str:
-        """Read the complete .txt/.md/.json file; preserve all bytes as text."""
-        file_path = Path(path)
-        if file_path.suffix.lower() not in {".txt", ".md", ".json"}:
-            raise ValueError("仅支持 .txt / .md / .json 文本文件。")
-        raw = file_path.read_bytes()
-        try:
-            return raw.decode("utf-8-sig")
-        except UnicodeDecodeError as exc:
-            raise ValueError("文件必须是 UTF-8 或 UTF-8-BOM 文本，且不能静默截断。") from exc
-
-    def _on_custom_prompt_editor_changed(self) -> None:
-        if not hasattr(self, "custom_prompt_editor"):
-            return
-        text = self.custom_prompt_editor.toPlainText()
-        size = len(text.encode("utf-8", "replace"))
-        ok, message = self.validate_custom_prompt(text)
-        limit_note = ""
-        if size > self._custom_capacity:
-            limit_note = " · 超出文本容量"
-        elif size > self.API_BODY_LIMIT:
-            limit_note = " · 超出 API 请求上限"
-        if hasattr(self, "custom_prompt_capacity_label"):
-            self.custom_prompt_capacity_label.setText(
-                f"{size} B / {self._custom_capacity} B · API 请求上限 64 KiB{limit_note}"
-            )
-        if hasattr(self, "custom_prompt_validation_label"):
-            self.custom_prompt_validation_label.setText(
-                message or "可保存为本地草稿；应用内核时才会写入并保存，不会静默截断。"
-            )
-        if hasattr(self, "custom_prompt_save_button"):
-            self.custom_prompt_save_button.setEnabled(ok)
-
-    def _upload_custom_prompt_file(self, checked: bool = False) -> None:
-        parent = self.custom_prompt_dialog if hasattr(self, "custom_prompt_dialog") else self
-        path, _ = QFileDialog.getOpenFileName(
-            parent,
-            "选择自定义提示词文件",
-            "",
-            "文本文件 (*.txt *.md *.json)",
-        )
-        if not path:
-            return
-        try:
-            text = self._read_custom_prompt_file(path)
-        except (OSError, ValueError) as exc:
-            self.inform(str(exc))
-            if hasattr(self, "custom_prompt_validation_label"):
-                self.custom_prompt_validation_label.setText(str(exc))
-            return
-        if hasattr(self, "custom_prompt_editor"):
-            self.custom_prompt_editor.setPlainText(text)
-
-    def save_custom_prompt_draft(self) -> bool:
-        text = (
-            self.custom_prompt_editor.toPlainText()
-            if hasattr(self, "custom_prompt_editor")
-            else self._custom_prompt_draft
-        )
-        ok, message = self.validate_custom_prompt(text)
-        if not ok:
-            self.inform(message)
-            return False
-        self._custom_prompt_draft = text
-        index = self.tier.findData("custom")
-        if index >= 0 and self.tier.currentData() != "custom":
-            self.tier.setCurrentIndex(index)
-        self._refresh_custom_prompt_labels()
-        self.inform("自定义提示词已保存为本地草稿；选择“自定义上传”并点击“应用内核”后才会写入内核。")
-        return True
-
-    def open_custom_prompt_dialog(self, checked: bool = False) -> bool:
-        dialog = QDialog(self)
-        self.custom_prompt_dialog = dialog
-        dialog.setWindowTitle("自定义核心指令层")
-        dialog.setModal(True)
-        dialog.setMinimumWidth(640)
-        layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(18, 16, 18, 14)
-        layout.setSpacing(10)
-        layout.addWidget(label(
-            "仅替换 3 个 CORE_SLOTS（核心指令层）；identity、工具声明、全部辅助模板与 applyEdits 绕过保持不变。"
-            " 文本必须为 UTF-8 / UTF-8-BOM、非空、无 NUL、无 Go 模板定界符，且不超过所示容量；不会静默截断。"
-            " 状态只返回元数据，不返回全文；重新应用已保存文本时仍需粘贴或上传原文本。",
-            "Small", True,
-        ))
-        self.custom_prompt_editor = QTextEdit()
-        self.custom_prompt_editor.setAcceptRichText(False)
-        self.custom_prompt_editor.setAccessibleName("自定义提示词文本")
-        self.custom_prompt_editor.setPlainText(self._custom_prompt_draft)
-        layout.addWidget(self.custom_prompt_editor, 1)
-        self.custom_prompt_capacity_label = label("", "Small", True)
-        self.custom_prompt_capacity_label.setAccessibleName("自定义提示词字节数")
-        layout.addWidget(self.custom_prompt_capacity_label)
-        self.custom_prompt_validation_label = label("", "Small", True)
-        layout.addWidget(self.custom_prompt_validation_label)
-        actions = QHBoxLayout()
-        actions.setSpacing(8)
-        self.custom_prompt_upload_button = self.button("上传 .txt / .md / .json", self._upload_custom_prompt_file)
-        actions.addWidget(self.custom_prompt_upload_button)
-        actions.addStretch(1)
-        actions.addWidget(self.button("取消", lambda _checked=False: dialog.reject()))
-        self.custom_prompt_save_button = self.button(
-            "保存为本地草稿",
-            lambda _checked=False: dialog.accept() if self.save_custom_prompt_draft() else None,
-            "AccentSoft",
-        )
-        actions.addWidget(self.custom_prompt_save_button)
-        layout.addLayout(actions)
-        self.custom_prompt_editor.textChanged.connect(self._on_custom_prompt_editor_changed)
-        self._on_custom_prompt_editor_changed()
-        accepted = int(dialog.exec()) == int(QDialog.DialogCode.Accepted)
-        return accepted and bool(self._custom_prompt_draft)
-
     def _update_dirty_badges(self) -> None:
         if hasattr(self, "network_dirty_badge"):
             self.network_dirty_badge.setVisible("network" in self._dirty)
@@ -1326,7 +1137,6 @@ class MainWindow(QMainWindow):
 
         kernel = state.get("kernel") or {}
         desired = kernel.get("desired") or {}
-        self._update_custom_prompt_metadata(kernel.get("customPrompt"))
         if "kernel" not in self._dirty:
             t_val = desired.get("promptTier", state.get("promptTier", "3"))
             c_val = desired.get("contextMode", state.get("contextMode", "512k"))
@@ -1751,8 +1561,7 @@ class MainWindow(QMainWindow):
             and kernel.get("platformSupported", True)
             and any(t.get("exists") for t in kernel.get("targets", []))
         )
-        for w in (self.tier, self.context, self.custom_prompt_button,
-                  self.kernel_button, self.restore_button):
+        for w in (self.tier, self.context, self.kernel_button, self.restore_button):
             w.setEnabled(bool(can_kernel))
 
         acc_busy = self._is_busy("oauth-start", "oauth-submit", "oauth-cancel", "capture", "account-switch", "launch")
@@ -1885,28 +1694,20 @@ class MainWindow(QMainWindow):
 
     def apply_kernel(self, checked: bool = False, restore: bool = False) -> None:
         values = (
-            {"promptTier": "stock", "contextMode": "stock", "clearCustomPrompt": True}
+            {"promptTier": "stock", "contextMode": "stock"}
             if restore
             else {"promptTier": self.tier.currentData(), "contextMode": self.context.currentData()}
         )
         if not restore:
-            tier = values["promptTier"]
-            if tier not in self.VISIBLE_TIERS:
-                self.inform("请选择官方原版、精简·防编造或自定义上传，再应用设置。")
+            if values["promptTier"] not in self.VISIBLE_TIERS:
+                self.inform("请选择官方原版或精简·防编造，再应用设置。")
                 return
-            if tier == "custom":
-                ok, message = self.validate_custom_prompt(self._custom_prompt_draft)
-                if not ok:
-                    self.inform(message)
-                    return
-                values["promptText"] = self._custom_prompt_draft
             self._dirty.add("kernel")
         if self.confirm(
             "恢复官方内核" if restore else "应用本机内核设置",
             "这会修改本机 Antigravity 的 language_server.exe，首次修改自动创建 .bak 备份。建议先退出 AG。是否继续？",
         ):
-            if self.perform("kernel-apply", "/api/kernel/apply", values, scope="kernel", timeout=120000):
-                self._refresh_custom_prompt_labels()
+            self.perform("kernel-apply", "/api/kernel/apply", values, scope="kernel", timeout=120000)
 
     # ------------------------------------------------------------------ OAuth & Account Actions
     @staticmethod

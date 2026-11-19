@@ -1,6 +1,6 @@
 const fs = require('node:fs');
 const { readJson, writeJson } = require('./storage');
-const { normalizePromptTier, normalizeContextMode, validateCustomPrompt } = require('../features/kernel-patch');
+const { normalizePromptTier, normalizeContextMode } = require('../features/kernel-patch');
 
 const DEFAULTS = Object.freeze({
   port: 7890,
@@ -11,8 +11,6 @@ const DEFAULTS = Object.freeze({
   promptTier: '3',
   promptPayloadVersion: 2,
   contextMode: '512k',
-  customSystemPrompt: '',
-  customPromptUpdatedAt: 0,
   autoApplyKernelPatch: true,
   // Verified before every launch: a dead or misrouted proxy is what AG reports as an opaque
   // "HTTP 400 / User location is not supported" dialog, so the launcher checks the exit itself.
@@ -63,17 +61,9 @@ function normalizeSettings(input = {}, previous = DEFAULTS) {
     if (![1, 2].includes(input.promptPayloadVersion)) throw new Error("promptPayloadVersion 取值不受支持");
     result.promptPayloadVersion = input.promptPayloadVersion;
   }
-  if (input.customSystemPrompt !== undefined) {
-    if (typeof input.customSystemPrompt !== 'string') throw new Error('customSystemPrompt 必须是文本');
-    if (input.customSystemPrompt) validateCustomPrompt(input.customSystemPrompt);
-    result.customSystemPrompt = input.customSystemPrompt;
-  }
-  if (input.customPromptUpdatedAt !== undefined) {
-    if (!Number.isSafeInteger(input.customPromptUpdatedAt) || input.customPromptUpdatedAt < 0) {
-      throw new Error('customPromptUpdatedAt 必须是非负整数');
-    }
-    result.customPromptUpdatedAt = input.customPromptUpdatedAt;
-  }
+  // customSystemPrompt / customPromptUpdatedAt disappeared with the custom prompt tier. They are
+  // ignored rather than rejected, so a settings file written by an older build still loads and is
+  // rewritten without them on the next update.
   if (input.mobileMode !== undefined) {
     if (!['quick', 'fixed'].includes(input.mobileMode)) throw new Error('手机远程模式必须是 quick 或 fixed');
     result.mobileMode = input.mobileMode;
@@ -104,11 +94,12 @@ function assertLaunchSettingsMutable(input, previous, phase) {
   }
 }
 
+// The custom prompt tier was removed, and its two keys are already dropped when a settings file is
+// loaded. They are stripped here as well so the local API stays unable to echo prompt text even if a
+// snapshot arrives from a hand-edited file or an older build.
 function publicSettings(value = {}) {
-  const result = { ...value };
-  delete result.customSystemPrompt;
-  delete result.customPromptUpdatedAt;
-  return result;
+  const { customSystemPrompt, customPromptUpdatedAt, ...rest } = value;
+  return rest;
 }
 
 module.exports = { DEFAULTS, KERNEL_DEFAULTS, normalizeMobileUrl, normalizeSettings, createSettings, publicSettings, assertLaunchSettingsMutable };

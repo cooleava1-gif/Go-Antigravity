@@ -152,31 +152,10 @@ class BackendClient(QObject):
             text = text.replace(self._token, "[会话已隐藏]")
         body = (operation or {}).get("body")
         if isinstance(body, dict):
-            for key in ("pin", "rawInput", "refreshToken", "tunnelToken", "callbackUrl", "code", "state", "promptText"):
+            for key in ("pin", "rawInput", "refreshToken", "tunnelToken", "callbackUrl", "code", "state"):
                 secret = body.get(key)
                 if isinstance(secret, str) and secret:
                     text = text.replace(secret, "[敏感内容已隐藏]")
-        prompt = body.get("promptText") if isinstance(body, dict) else None
-        if isinstance(prompt, str) and prompt:
-            fragments = {
-                prompt,
-                json.dumps(prompt, ensure_ascii=False)[1:-1],
-                json.dumps(prompt)[1:-1],
-                repr(prompt)[1:-1],
-            }
-            for fragment in fragments:
-                if fragment:
-                    text = text.replace(fragment, "[敏感内容已隐藏]")
-            text = re.sub(
-                r'(?i)("?promptText"?\s*[:=]\s*)"(?:\\.|[^"\\])*"',
-                r'\1"[敏感内容已隐藏]"',
-                text,
-            )
-            text = re.sub(
-                r"(?i)(promptText\s*[:=]\s*)([^\s&,}]+)",
-                r"\1[敏感内容已隐藏]",
-                text,
-            )
         text = re.sub(r"\b\d{8}\b", "[PIN 已隐藏]", text)
         text = re.sub(r"(?i)(token|pin)=([^&\s]+)", r"\1=[已隐藏]", text)
         return text[:600]

@@ -352,7 +352,7 @@ test('OAuth 无效或重放 state 不写账号，合法回调无需 boot token �
 // ---------- 内核补丁 ----------
 
 test('内核状态接口需要会话令牌，并返回档位词表供 UI 渲染', async () => {
-  const app = stubApp({ kernelStatus: () => ({ desired: { promptTier: '3', contextMode: '900k', customHash: null }, customPrompt: { available: false, bytes: 0, hash: null, updatedAt: null, capacity: 3960 }, tiers: { stock: {}, '3': {}, custom: {} }, modes: { stock: {}, '512k': {}, '900k': {} }, targets: [] }) });
+  const app = stubApp({ kernelStatus: () => ({ desired: { promptTier: '3', contextMode: '900k' }, tiers: { stock: {}, '3': {}, custom: { visible: false, legacy: true } }, modes: { stock: {}, '512k': {}, '900k': {} }, targets: [] }) });
   await withServer(app, async port => {
     const denied = await request(port, { route: '/api/kernel/status', headers: { Host: `127.0.0.1:${port}` } });
     assert.equal(denied.status, 401);
@@ -362,9 +362,9 @@ test('内核状态接口需要会话令牌，并返回档位词表供 UI 渲染'
     const body = JSON.parse(ok.body);
     assert.equal(body.kernel.desired.promptTier, '3');
     assert.ok(body.kernel.tiers['3'], '档位词表必须随后端下发，UI 不重复定义');
-    assert.ok(body.kernel.tiers.custom);
+    assert.strictEqual(body.kernel.tiers.custom.visible, false, '已移除的档位只用于识别旧内核状态');
     assert.ok(body.kernel.modes['900k']);
-    assert.deepStrictEqual(body.kernel.customPrompt, { available: false, bytes: 0, hash: null, updatedAt: null, capacity: 3960 });
+    assert.ok(!Object.hasOwn(body.kernel, 'customPrompt'));
     assert.equal(JSON.stringify(body.kernel).includes('自定义提示词全文'), false);
   });
 });
@@ -410,15 +410,15 @@ test('应用内核补丁成功时回传最新内核状态', async () => {
   });
 });
 
-test('public config/status and kernel apply never echo full custom text', async () => {
+test('public config/status and kernel apply never echo retired custom prompt fields', async () => {
   const secret = '本地自定义核心指令：只在内核里出现';
   const saved = { port: 7890, customSystemPrompt: secret, customPromptUpdatedAt: 1730000000000 };
   const calls = [];
   const app = stubApp({
     settings: { get: () => ({ ...saved }) },
-    status: () => ({ port: 7890, kernel: { customPrompt: { available: true, bytes: Buffer.byteLength(secret, 'utf8'), hash: 'fixture-hash', updatedAt: saved.customPromptUpdatedAt, capacity: 3960 } } }),
+    status: () => ({ port: 7890, kernel: { desired: { promptTier: 'stock', contextMode: '900k' }, targets: [] } }),
     configure: async body => { calls.push(['config', body]); },
-    kernelStatus: () => ({ desired: { promptTier: 'custom', contextMode: '900k', customHash: 'fixture-hash' }, customPrompt: { available: true, bytes: Buffer.byteLength(secret, 'utf8'), hash: 'fixture-hash', updatedAt: saved.customPromptUpdatedAt, capacity: 3960 }, targets: [] }),
+    kernelStatus: () => ({ desired: { promptTier: 'stock', contextMode: '900k' }, targets: [] }),
     applyKernel: async body => { calls.push(['apply', body]); return { ok: true, logs: [], errors: [] }; }
   });
   await withServer(app, async port => {
@@ -430,39 +430,33 @@ test('public config/status and kernel apply never echo full custom text', async 
     const kernel = await request(port, { route: '/api/kernel/status', headers });
     assert.equal(kernel.status, 200);
     assert.equal(kernel.body.includes(secret), false);
-    assert.equal(JSON.parse(kernel.body).kernel.customPrompt.capacity, 3960);
+    assert.ok(!Object.hasOwn(JSON.parse(kernel.body).kernel, 'customPrompt'));
     const config = await request(port, { method: 'POST', route: '/api/config', headers, body: JSON.stringify({ port: 7891 }) });
     assert.equal(config.status, 200);
     assert.equal(config.body.includes(secret), false);
     assert.equal(config.body.includes('customSystemPrompt'), false);
     assert.equal(config.body.includes('customPromptUpdatedAt'), false);
-    const apply = await request(port, { method: 'POST', route: '/api/kernel/apply', headers, body: JSON.stringify({ promptTier: 'custom', contextMode: '900k', promptText: secret }) });
+    // Retired fields in the body are dropped instead of being forwarded to the patcher.
+    const apply = await request(port, { method: 'POST', route: '/api/kernel/apply', headers, body: JSON.stringify({ promptTier: '3', contextMode: '900k', promptText: secret, clearCustomPrompt: true }) });
     assert.equal(apply.status, 200);
     const forwarded = calls.find(([kind]) => kind === 'apply')[1];
-    assert.equal(forwarded.promptTier, 'custom');
-    assert.equal(forwarded.contextMode, '900k');
-    assert.equal(forwarded.promptText, secret);
-    const clear = await request(port, { method: 'POST', route: '/api/kernel/apply', headers, body: JSON.stringify({ promptTier: 'stock', contextMode: 'stock', clearCustomPrompt: true }) });
-    assert.equal(clear.status, 200);
-    assert.equal(calls.filter(([kind]) => kind === 'apply')[1][1].clearCustomPrompt, true);
+    assert.deepStrictEqual(forwarded, { promptTier: '3', contextMode: '900k' });
+    assert.equal(JSON.stringify(forwarded).includes(secret), false);
   });
 });
 
-test('kernel apply with custom text and API body limit preserve transport contract', async () => {
-  const secret = 'x'.repeat(3960);
+test('kernel apply keeps the API body limit without a custom text channel', async () => {
   const calls = [];
   const app = stubApp({
-    kernelStatus: () => ({ desired: { promptTier: 'custom' }, targets: [] }),
+    kernelStatus: () => ({ desired: { promptTier: '3' }, targets: [] }),
     applyKernel: async body => { calls.push(body); return { ok: true, logs: [], errors: [] }; }
   });
   await withServer(app, async port => {
     const headers = { Host: `127.0.0.1:${port}`, 'X-Goagy-Token': TOKEN, 'Content-Type': 'application/json' };
-    const ok = await request(port, { method: 'POST', route: '/api/kernel/apply', headers, body: JSON.stringify({ promptTier: 'custom', contextMode: '900k', promptText: secret }) });
+    const ok = await request(port, { method: 'POST', route: '/api/kernel/apply', headers, body: JSON.stringify({ promptTier: '3', contextMode: '900k', promptText: 'x'.repeat(3960) }) });
     assert.equal(ok.status, 200);
-    assert.equal(calls[0].promptTier, 'custom');
-    assert.equal(calls[0].contextMode, '900k');
-    assert.equal(calls[0].promptText, secret);
-    const oversized = await request(port, { method: 'POST', route: '/api/kernel/apply', headers, body: JSON.stringify({ promptTier: 'custom', promptText: 'y'.repeat(64 * 1024 + 1) }) });
+    assert.deepStrictEqual(calls[0], { promptTier: '3', contextMode: '900k' }, '大字段不再有通道，也不会被转发');
+    const oversized = await request(port, { method: 'POST', route: '/api/kernel/apply', headers, body: JSON.stringify({ promptTier: '3', padding: 'y'.repeat(64 * 1024 + 1) }) });
     assert.equal(oversized.status, 400);
     assert.match(oversized.body, /请求内容过大|过大/);
     assert.equal(calls.length, 1);

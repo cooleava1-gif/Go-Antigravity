@@ -172,24 +172,6 @@ class BackendClientOrderingTests(unittest.TestCase):
         self.assertIn("敏感内容已隐藏", self.errors[0][1])
         self.assertNotIn("mobile-config", self.client._pending)
 
-    def test_custom_prompt_text_reflected_by_kernel_error_is_redacted_before_notice(self):
-        secret = "fixture-custom-core-instructions-not-real"
-        self.assertTrue(self.client.request("kernel-apply", "/api/kernel/apply",
-                                             {"promptTier": "custom", "promptText": secret}))
-        request = self.client.take("/api/kernel/apply")
-        self.complete(request, {"ok": False, "error": "Rejected prompt " + secret}, status=500)
-        self.assertEqual(len(self.errors), 1)
-        self.assertNotIn(secret, self.errors[0][1])
-        self.assertIn("敏感内容已隐藏", self.errors[0][1])
-
-    def test_saved_custom_system_prompt_reflected_by_error_is_redacted(self):
-        saved = "fixture-customSystemPrompt-saved-text-not-real"
-        self.assertTrue(self.client.request("config-custom", "/api/config", {"customSystemPrompt": saved}))
-        request = self.client.take("/api/config")
-        self.complete(request, {"ok": False, "error": "Rejected field " + saved}, status=500)
-        self.assertNotIn(saved, self.errors[-1][1])
-        self.assertIn("敏感内容已隐藏", self.errors[-1][1])
-
     def test_failed_mutation_does_not_invalidate_existing_status(self):
         self.client.refresh()
         old_status = self.client.take("/api/status")

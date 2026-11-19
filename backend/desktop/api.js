@@ -176,8 +176,6 @@ function createApi(app) {
           promptTier: data?.promptTier,
           contextMode: data?.contextMode
         };
-        if (data && Object.hasOwn(data, 'promptText')) kernelInput.promptText = data.promptText;
-        if (data?.clearCustomPrompt === true) kernelInput.clearCustomPrompt = true;
         const result = await app.applyKernel(kernelInput);
         return json(response, { ok: true, ...result, kernel: app.kernelStatus() }, result.ok ? 200 : 409);
       }

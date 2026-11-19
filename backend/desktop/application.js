@@ -21,7 +21,7 @@ const { createApi } = require('./api');
 const { LanguageService } = require('../adapters/desktop/language-service');
 const { ContextMonitor } = require('../features/context-monitor');
 const { createSourceGuard } = require('../features/source-guard');
-const { inspectKernel, applyKernelPatch, CONTEXT_MODES, PROMPT_TIERS, CONTEXT_SIGNATURES, CUSTOM_PROMPT_CAPACITY, customPromptMetadata } = require('../features/kernel-patch');
+const { inspectKernel, applyKernelPatch, CONTEXT_MODES, PROMPT_TIERS, CONTEXT_SIGNATURES } = require('../features/kernel-patch');
 const { probeProxy } = require('../features/proxy-probe');
 const { createAgLogWatcher } = require('../features/ag-log-watch');
 const { createMobileAccess } = require('../features/mobile-access');
@@ -170,25 +170,7 @@ async function createApplication({ rootDir, dataDir, readyFile, native = false, 
   });
   const kernelDesired = () => {
     const current = settings.get();
-    const desired = { promptTier: current.promptTier, contextMode: current.contextMode };
-    if (current.promptTier === 'custom' && current.customSystemPrompt) {
-      desired.customHash = customPromptMetadata(current.customSystemPrompt).hash;
-    }
-    return desired;
-  };
-  const customPromptStatus = () => {
-    const current = settings.get();
-    if (!current.customSystemPrompt) {
-      return { available: false, bytes: 0, hash: null, updatedAt: null, capacity: CUSTOM_PROMPT_CAPACITY };
-    }
-    const metadata = customPromptMetadata(current.customSystemPrompt);
-    return {
-      available: true,
-      bytes: metadata.bytes,
-      hash: metadata.hash,
-      updatedAt: current.customPromptUpdatedAt || null,
-      capacity: metadata.capacity
-    };
+    return { promptTier: current.promptTier, contextMode: current.contextMode };
   };
   const cdp = new CdpHub({
     profile: () => desktop.profile,
@@ -245,18 +227,14 @@ async function createApplication({ rootDir, dataDir, readyFile, native = false, 
       // Context-only recovery must also leave every legacy prompt byte untouched.
       const savedSettings = settings.get();
       const allowPrompt = savedSettings.promptPayloadVersion === 2
-        && ['stock', '3', '4', 'custom'].includes(desired.promptTier)
-        && (desired.promptTier !== 'custom' || Boolean(savedSettings.customSystemPrompt))
+        && ['stock', '3', '4'].includes(desired.promptTier)
         && !existing.some(target => target.promptLegacy || target.promptPayloadVersion === 1);
-      // A fresh default must not silently replace an already selected non-stock payload. A
-      // saved custom prompt is explicit consent; otherwise automatic migration is limited to
-      // pristine/unknown targets and the current desired tier.
-      const promptMigrationAllowed = desired.promptTier === 'custom'
-        || existing.every(target => !target.promptTier || target.promptTier === 'stock' || target.promptTier === desired.promptTier);
+      // A fresh default must not silently replace an already selected non-stock payload: automatic
+      // migration is limited to pristine/unknown targets and the current desired tier.
+      const promptMigrationAllowed = existing.every(target => !target.promptTier || target.promptTier === 'stock' || target.promptTier === desired.promptTier);
       if (allowPrompt && promptMigrationAllowed && existing.some(target => target.promptTier !== desired.promptTier)) {
         automatic.promptTier = desired.promptTier;
       }
-      if (automatic.promptTier === 'custom') automatic.promptText = savedSettings.customSystemPrompt;
       if (existing.some(target => target.contextMode !== desired.contextMode)) automatic.contextMode = desired.contextMode;
       if (settings.get().autoApplyKernelPatch && Object.keys(automatic).length) {
         events.log('SYSTEM', '检测到内核设置变化，正在同步已确认的选项', 'tag-proxy');
@@ -403,7 +381,6 @@ async function createApplication({ rootDir, dataDir, readyFile, native = false, 
       const inspection = readKernelInspection(refresh);
       return {
         desired: kernelDesired(),
-        customPrompt: customPromptStatus(),
         promptPreferenceVersion: settings.get().promptPayloadVersion,
         autoApplyKernelPatch: settings.get().autoApplyKernelPatch,
         contextCap: effectiveContextCap(),
@@ -433,10 +410,12 @@ async function createApplication({ rootDir, dataDir, readyFile, native = false, 
       const incoming = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
       const current = settings.get();
       const explicitAxes = incoming.promptTier !== undefined || incoming.contextMode !== undefined;
-      const request = explicitAxes ? { ...incoming } : { contextMode: current.contextMode };
-      if (request.promptTier === 'custom' && request.promptText === undefined) {
-        request.promptText = current.customSystemPrompt;
-      }
+      // Only the two documented axes reach the patcher: a stale promptText or a UI-only flag in the
+      // request body must never influence a rewrite of a signed binary.
+      const request = {};
+      if (incoming.promptTier !== undefined) request.promptTier = incoming.promptTier;
+      if (incoming.contextMode !== undefined) request.contextMode = incoming.contextMode;
+      if (!explicitAxes) request.contextMode = current.contextMode;
       const result = await runKernelPatch(request);
       for (const line of result.logs) events.log('KERNEL', line, result.ok ? 'tag-proxy' : 'tag-warn');
       for (const line of result.errors) events.log('KERNEL', line, 'tag-alert');
@@ -447,14 +426,6 @@ async function createApplication({ rootDir, dataDir, readyFile, native = false, 
         if (result.promptTier != null) saved.promptTier = result.promptTier;
         if (result.contextMode != null) saved.contextMode = result.contextMode;
         if (incoming.promptTier !== undefined && result.promptTier != null) saved.promptPayloadVersion = 2;
-        if (result.promptTier === 'custom' && request.promptText !== undefined) {
-          saved.customSystemPrompt = request.promptText;
-          saved.customPromptUpdatedAt = Date.now();
-        }
-        if (incoming.clearCustomPrompt === true) {
-          saved.customSystemPrompt = '';
-          saved.customPromptUpdatedAt = 0;
-        }
         await app.configure(saved);
       } else {
         events.publish({ kernel: app.kernelStatus() });

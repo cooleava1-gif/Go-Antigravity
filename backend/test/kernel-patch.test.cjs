@@ -63,7 +63,6 @@ function assertConfigUnchanged(fixture) {
 
 const {
   AD_SLOTS, BLOAT_SLOTS, CORE_SLOTS, CONTEXT_SIGNATURES, PROMPT_TIERS, CONTEXT_MODES, SLOT_CAPACITY,
-  CUSTOM_PROMPT_CAPACITY, validateCustomPrompt, customPromptMetadata,
   normalizePromptTier, normalizeContextMode, parseEmbedTemplates, computeActiveBytes, writePaddedTemplate,
   detectPromptTier, detectPromptState, detectContextMode, inspectContextGates, applyPromptTier, applyContextPatch,
   syncContextWindowConfig, detectConfiguredContextCap, inspectKernel, applyKernelPatch, resolveTargets,
@@ -1111,13 +1110,16 @@ test('overlapping apply and direct sync cannot interleave with an active transac
   assertNoTransactionTemps(fixture);
 });
 
-test('official, compact and custom are visible while balanced and legacy keys remain readable', () => {
-  assert.deepStrictEqual(Object.values(PROMPT_TIERS).filter(tier => tier.visible).map(tier => tier.key).sort(), ['3', 'custom', 'stock']);
+test('official and compact are the only selectable tiers while removed and legacy keys stay readable', () => {
+  assert.deepStrictEqual(Object.values(PROMPT_TIERS).filter(tier => tier.visible).map(tier => tier.key).sort(), ['3', 'stock']);
   assert.strictEqual(normalizePromptTier('official'), 'stock');
   assert.strictEqual(normalizePromptTier('balanced'), '4');
   assert.strictEqual(normalizePromptTier('compact'), '3');
-  assert.strictEqual(normalizePromptTier('custom'), 'custom');
-  assert.strictEqual(normalizePromptTier('replace'), 'custom');
+  // The custom tier is gone: an old preference degrades to stock instead of failing validation and
+  // resetting every other setting, and it can never be selected again.
+  assert.strictEqual(normalizePromptTier('custom'), 'stock');
+  assert.strictEqual(normalizePromptTier('replace'), 'stock');
+  assert.strictEqual(PROMPT_TIERS.custom.visible, false);
   for (const key of ['1', '2', '4']) {
     assert.strictEqual(normalizePromptTier(key), key);
     assert.strictEqual(PROMPT_TIERS[key].visible, false);
@@ -1126,72 +1128,43 @@ test('official, compact and custom are visible while balanced and legacy keys re
   assert.strictEqual(normalizePromptTier('__proto__'), null);
 });
 
-test('custom prompt helpers enforce the exact 3960-byte UTF-8 contract', () => {
-  const { createHash } = require('node:crypto');
-  const prefix = '先读取再断言 · Unicode ✓ ';
-  const text = prefix + 'x'.repeat(CUSTOM_PROMPT_CAPACITY - Buffer.byteLength(prefix, 'utf8'));
-  assert.strictEqual(CUSTOM_PROMPT_CAPACITY, 3960);
-  assert.strictEqual(validateCustomPrompt(text), text);
-  const metadata = customPromptMetadata(text);
-  assert.deepStrictEqual(metadata, {
-    bytes: Buffer.byteLength(text, 'utf8'),
-    hash: createHash('sha256').update(Buffer.from(text, 'utf8')).digest('hex'),
-    capacity: 3960
-  });
-  assert.strictEqual(metadata.hash.length, 64);
-  assert.strictEqual(metadata.bytes, 3960);
-  for (const invalid of ['', null, undefined, 1, {}, [], 'has\u0000nul', '{{ template }}', 'a }} b', '{{- /*', '*/ -}}', 'x'.repeat(3961), '✓'.repeat(1321)]) {
-    assert.throws(() => validateCustomPrompt(invalid), /自定义|文本|UTF-8|NUL|模板|容量|3960|4088/);
-  }
+test('context aliases and token caps stay stable', () => {
   assert.strictEqual(normalizeContextMode('1m'), '900k');
   assert.strictEqual(normalizeContextMode('max'), '900k');
   assert.strictEqual(CONTEXT_MODES['900k'].tokens, 983040);
   assert.strictEqual(CONTEXT_MODES['512k'].tokens, 512000);
 });
 
-test('custom prompt replaces exactly the three core slots and remains byte-verifiable', () => {
-  const original = buildKernel(), slots = parseEmbedTemplates(original);
-  const prefix = '仅替换核心指令层。';
-  const text = prefix + 'A'.repeat(CUSTOM_PROMPT_CAPACITY - Buffer.byteLength(prefix, 'utf8'));
-  assert.strictEqual(Buffer.byteLength(text, 'utf8'), 3960);
-  assert.strictEqual(CORE_SLOTS.length, 3);
-  const coreBytes = CORE_SLOTS.reduce((sum, name) => sum + slots.get(name).dataLength, 0);
-  assert.strictEqual(coreBytes, 4088);
-  const buffer = Buffer.from(original);
-  const result = applyPromptTier(buffer, original, 'custom', undefined, undefined, text);
-  assert.strictEqual(result.strippedBytes, 0);
-  assert.strictEqual(buffer.length, original.length);
-  const allowed = [...CORE_SLOTS.map(name => slots.get(name)), { dataOffset: APPLY_EDITS_OFF + 26, dataLength: 10 }];
-  for (let offset = 0; offset < buffer.length; offset++) {
-    if (buffer[offset] !== original[offset]) assert.ok(allowed.some(slot => offset >= slot.dataOffset && offset < slot.dataOffset + slot.dataLength), 'unexpected byte ' + offset);
-  }
-  for (const [name, slot] of slots) if (!CORE_SLOTS.includes(name)) {
-    assert.ok(buffer.subarray(slot.dataOffset, slot.dataOffset + slot.dataLength).equals(original.subarray(slot.dataOffset, slot.dataOffset + slot.dataLength)), name);
-  }
+test('a kernel patched by the removed custom tier is still recognised and restorable', () => {
+  const original = buildKernel(), slots = parseEmbedTemplates(original), buffer = Buffer.from(original);
+  // Reproduce the exact shape the removed tier wrote: a self-describing header at the start of the
+  // guidelines slot, no stripped auxiliary templates, everything else untouched.
+  const marker = 'GO-ANTIGRAVITY:CUSTOM:1;BYTES=0000000042;SHA256=' + 'a'.repeat(64) + ';';
+  writePaddedTemplate(buffer, slots.get(CORE_SLOTS[0]), marker + '仅替换核心指令层。');
   const state = detectPromptState(parseEmbedTemplates(buffer), buffer);
   assert.strictEqual(state.tier, 'custom');
   assert.strictEqual(state.payloadVersion, 3);
-  assert.strictEqual(state.legacy, false);
-  assert.strictEqual(state.customText, text);
-  assert.strictEqual(state.customHash, customPromptMetadata(text).hash);
-  assert.strictEqual(state.customBytes, 3960);
-  assert.strictEqual(verifyBackupMatches(buffer, original), null);
+  assert.strictEqual(state.legacy, true);
+  // It is identifiable, but unusable: writing it again is refused and a same-build backup is not
+  // accepted as a rewrite target, so the only exit is a stock restore.
+  assert.throws(() => applyPromptTier(Buffer.from(buffer), original, 'custom'), /自定义提示词档位已移除/);
+  assert.match(verifyBackupMatches(buffer, original), /已移除的自定义档位/);
   const restored = Buffer.from(buffer);
   applyPromptTier(restored, original, 'stock');
-  assert.ok(restored.equals(original), 'custom prompt exact restore');
+  assert.ok(restored.equals(original), 'stock restore ignores the legacy header');
 });
 
-test('inspect and apply expose custom metadata without echoing full custom text', async t => {
+test('the removed custom tier cannot be applied and leaves the kernel untouched', async t => {
   const fixture = setupPatchCase(t);
-  const text = '自定义核心指令：核验后汇报。';
-  const applied = await applyKernelPatch({ promptTier: 'custom', contextMode: '900k', promptText: text }, { targets: [fixture.target], homeDir: fixture.home });
-  assert.strictEqual(applied.ok, true, JSON.stringify(applied));
+  await assert.rejects(
+    () => applyKernelPatch({ promptTier: 'custom', promptText: 'ignored' }, { targets: [fixture.target], homeDir: fixture.home }),
+    /自定义提示词档位已移除/);
+  assert.ok(read(fixture.target).equals(buildKernel()));
+  assert.strictEqual(fs.existsSync(fixture.target.backupPath), false);
   const inspected = inspectKernel({ targets: [fixture.target] }).targets[0];
-  assert.strictEqual(inspected.customHash, customPromptMetadata(text).hash);
-  assert.strictEqual(inspected.customBytes, Buffer.byteLength(text, 'utf8'));
-  assert.strictEqual(JSON.stringify(inspected).includes(text), false);
-  const restored = await applyKernelPatch({ promptTier: 'stock', contextMode: 'stock' }, { targets: [fixture.target], homeDir: fixture.home });
-  assert.strictEqual(restored.ok, true, JSON.stringify(restored));
+  assert.strictEqual(inspected.promptTier, 'stock');
+  assert.strictEqual(Object.hasOwn(inspected, 'customHash'), false);
+  assert.strictEqual(Object.hasOwn(inspected, 'customBytes'), false);
 });
 
 test('legacy payload fingerprints are frozen independently of current payload updates', () => {

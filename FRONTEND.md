@@ -36,18 +36,18 @@ npm ci
 npm run verify
 ~~~
 
-`desktop-qt/smoke_test.py` 仅使用合成 `FakeClient`、临时 `QSettings`（`QTemporaryDir`）与测试快照，不写真实配置、令牌库或内核；覆盖四大专页动画切换、网络/增强未保存保护与端口预设联动锁定、三档提示词与自定义草稿/校验、恢复默认清除载荷、上下文 512K/900K/1M 文案、单主 CTA 账户卡片与配额排序、OAuth 域名校验、手机远程模式切换与 PIN 遮盖、全部日志和脱敏、深浅双主题及 `1120×640` / `940×580` 横向零溢出检查。
+`desktop-qt/smoke_test.py` 仅使用合成 `FakeClient`、临时 `QSettings`（`QTemporaryDir`）与测试快照，不写真实配置、令牌库或内核；覆盖四大专页动画切换、网络/增强未保存保护与端口预设联动锁定、两档提示词与恢复默认载荷、上下文 512K/900K/1M 文案、单主 CTA 账户卡片与配额排序、OAuth 域名校验、手机远程模式切换与 PIN 遮盖、全部日志和脱敏、深浅双主题及 `1120×640` / `940×580` 横向零溢出检查。
 
-`test_backend_client.py`、`test_widgets.py`、`test_ui.py` 和 `test_account_tools_ui.py` 覆盖迟到状态与并行保存响应、`promptText` 错误回显脱敏、长文本与用量布局、日志筛选、账户按钮与状态保护，以及七天模型分布口径；均使用合成数据和隔离设置，不连接真实服务。
+`test_backend_client.py`、`test_widgets.py`、`test_ui.py` 和 `test_account_tools_ui.py` 覆盖迟到状态与并行保存响应、错误回显脱敏、长文本与用量布局、日志筛选、账户按钮与状态保护，以及七天模型分布口径；均使用合成数据和隔离设置，不连接真实服务。
 
 ## 交互与安全规范
 
 - 顶部导航栏固定三分组控制条：左侧品牌与当前账户/代理就绪摘要、居中「概览 / 账户 / 远程 / 日志」液态胶囊导航、右侧主题切换、「检测连接」与「启动 Antigravity」。
 - 手机远程：仅在 `running` / `degraded` / `external` 且有公网地址时显示 HTTPS 地址与二维码；恢复阶段清除旧地址与二维码，保留当前 PIN，恢复完成后展示最新地址。`stopped` 或无公网地址时不显示本地 `127.0.0.1` 二维码；固定域名和密码态 Tunnel Token 表单仅在 `fixed` 模式下展示；Token 留空沿用、清除显式提交、保存成功清空输入，失败保留草稿，运行与外部服务状态禁用编辑；请求等待 `135s`，覆盖后端 `125s` 启动预算，并在启动和恢复阶段允许「停止服务」取消；PIN 默认遮盖，离开「远程」页或窗口失焦自动重新遮盖。
-- OAuth 授权回调地址、账户令牌、Tunnel Token、PIN 与自定义提示词 `promptText` 不得进入状态提示或可复制日志；客户端错误处理也遮盖本次提交的原值。
-- 系统提示词常规选择仅 `stock` / `3` / `custom`（官方原版 / 精简·防编造 / 自定义上传），默认 `3`；`4` 与旧 `1` / `2` 只保留识别和恢复，不自动勾选其他档。档位/模式词表由 `/api/kernel/status` 下发。自定义只替换三个核心指令槽（共 4088B），首槽 128B 自描述头使用户文本上限为 3960 UTF-8 字节；保留 `identity.tmpl`、工具声明、辅助模板与 `applyEdits` 旁路。
-- 自定义编辑器支持粘贴与 `.txt` / `.md` / `.json` UTF-8 / UTF-8-BOM 上传，实时显示字节数、3960B 用户上限和 64 KiB API 请求上限；校验空文本、NUL、无效 UTF-8、Go 模板分隔符及超额内容，不静默截断。草稿只留在 Qt 本机内存（或隔离的 QSettings 缓存）；`custom` 应用时提交 `promptText`，其他档位不提交。状态只展示 `kernel.customPrompt` 元数据（`available` / `bytes` / `hash` / `updatedAt` / `capacity`），`/api/status`、`/api/config` 回包与 `/api/kernel/status` 均不回显全文；错误提示遮盖 `promptText`。恢复默认固定提交 `{"promptTier":"stock","contextMode":"stock","clearCustomPrompt":true}` 并清除本机保存文本。
-- 内核 `promptPayloadVersion` 与设置中的迁移同意版本分别追踪，旧偏好或任一旧版目标不自动升级提示词；明确应用成功后才记录新版偏好。自定义文本仅在补丁成功后持久化，启动前同步只比较 `customHash` 与期望哈希并在漂移时补充 `promptText`，不自动迁移旧档或未知目标。
+- OAuth 授权回调地址、账户令牌、Tunnel Token、PIN 不得进入状态提示或可复制日志；客户端错误处理也遮盖本次提交的原值。
+- 系统提示词常规选择仅 `stock` / `3`（官方原版 / 精简·防编造），默认 `3`；`4` 与旧 `1` / `2` 只保留识别和恢复，不自动勾选其他档。已移除的 `custom` 档仍出现在 `/api/kernel/status` 的 `tiers` 词表里（`visible: false`），只用于识别旧内核状态，界面不渲染。精简只替换三个核心指令槽（共 4088B，v2 载荷约 2114B），保留 `identity.tmpl`、工具声明、辅助模板与 `applyEdits` 旁路。
+- 应用内核只提交 `{"promptTier", "contextMode"}` 两个轴，恢复默认固定提交 `{"promptTier":"stock","contextMode":"stock"}`；请求体里的其他字段（旧版 `promptText`、`clearCustomPrompt` 等）一律丢弃，不会到达补丁器。`/api/status`、`/api/config` 与 `/api/kernel/status` 都只返回两个轴、档位/模式词表和内核元数据。
+- 内核 `promptPayloadVersion` 与设置中的迁移同意版本分别追踪，旧偏好或任一旧版目标不自动升级提示词；明确应用成功后才记录新版偏好。启动前同步只应用已保存的两个轴，不自动迁移旧档或未知目标。
 - 上下文控件仅用无字小圆环和旁边百分比，浮层沿用宿主主题，支持悬停、点击、Escape 和窄屏滚动。仅保留估算上下文、模型、本对话输入／输出 Token、有效样本 TTFT 与按流式时长加权 TPS；缺失统计行和空分组自动隐藏，零值保留。系统／工具拆分、缓存和时长不再占位，采样覆盖与口径放入悬停提示。
 - 上下文档位键仍为 `stock` / `512k` / `900k`，按钮标签为「官方原版 / 512K / 900K / 1M」；提示说明所有受支持模型均已支持 1M，本地客户端上限为 512000 或 983040 tokens。保留既有字节签名、配置事务与上下文监控机制。
 - 说明小字统一 12px、允许换行；固定域名表单在最小窗口可纵向滚动，不产生横向溢出。

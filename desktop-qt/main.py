@@ -25,13 +25,6 @@ def demo_snapshot():
         "kernel": {
             "platformSupported": True,
             "desired": {"promptTier": "3", "contextMode": "512k"},
-            "customPrompt": {
-                "available": False,
-                "bytes": 0,
-                "hash": None,
-                "updatedAt": None,
-                "capacity": 3960,
-            },
             "targets": [{"exists": True, "backupExists": True, "promptTier": "3", "contextMode": "512k"}],
         },
         "proxy": {

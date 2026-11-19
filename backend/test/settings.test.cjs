@@ -52,8 +52,9 @@ test('出厂默认是精简·防编造 + 512K 上下文，并开启启动前自�
   assert.strictEqual(DEFAULTS.contextMode, '512k');
   assert.strictEqual(DEFAULTS.autoApplyKernelPatch, true);
   assert.deepStrictEqual(KERNEL_DEFAULTS, { promptTier: '3', contextMode: '512k' });
-  assert.strictEqual(DEFAULTS.customSystemPrompt, '');
-  assert.strictEqual(DEFAULTS.customPromptUpdatedAt, 0);
+  // The custom prompt tier and its two settings keys were removed; nothing may reintroduce them.
+  assert.strictEqual(Object.hasOwn(DEFAULTS, 'customSystemPrompt'), false);
+  assert.strictEqual(Object.hasOwn(DEFAULTS, 'customPromptUpdatedAt'), false);
   // 原有的两个开关不受影响
   assert.strictEqual(DEFAULTS.enableI18n, true);
   assert.strictEqual(DEFAULTS.enableContextMonitor, true);
@@ -125,12 +126,12 @@ test('prompt payload version is v2 only for new installs or explicit saved conse
   });
 });
 
-test('prompt tier aliases map to stable keys without dropping numeric legacy preferences', () => {
-  for (const [alias, expected] of [['official', 'stock'], ['balanced', '4'], ['compact', '3'], ['replace', 'custom'], ['custom', 'custom'], ['1', '1'], ['2', '2'], ['4', '4']]) {
+test('prompt tier aliases map to stable keys and the removed custom tier degrades to stock', () => {
+  for (const [alias, expected] of [['official', 'stock'], ['balanced', '4'], ['compact', '3'], ['replace', 'stock'], ['custom', 'stock'], ['1', '1'], ['2', '2'], ['4', '4']]) {
     assert.strictEqual(normalizeSettings({ promptTier: alias }).promptTier, expected);
   }
   assert.strictEqual(normalizeSettings({ promptTier: 'TIER3' }).promptTier, '3');
-  assert.strictEqual(normalizeSettings({ promptTier: 'CUSTOM' }).promptTier, 'custom');
+  assert.strictEqual(normalizeSettings({ promptTier: 'CUSTOM' }).promptTier, 'stock');
   assert.strictEqual(normalizeSettings({ contextMode: '1M' }).contextMode, '900k');
 });
 
@@ -144,32 +145,27 @@ test('设置文件损坏时回落到默认档位，不会挡住启动', () => {
   });
 });
 
-test('custom prompt is stored locally but excluded from public settings', () => {
+test('a settings file written by an older build still loads after the custom tier was removed', () => {
   const text = '本地自定义核心指令：先读取再断言。';
   assert.strictEqual(typeof publicSettings, 'function');
   withSettings(file => {
+    writeSettings(file, { promptTier: 'custom', customSystemPrompt: text, customPromptUpdatedAt: 1730000000000 });
     const settings = createSettings(file);
-    const updatedAt = 1730000000000;
-    const saved = settings.update({ customSystemPrompt: text, customPromptUpdatedAt: updatedAt });
-    assert.strictEqual(saved.customSystemPrompt, text);
-    assert.strictEqual(saved.customPromptUpdatedAt, updatedAt);
-    const reloaded = createSettings(file).get();
-    assert.strictEqual(reloaded.customSystemPrompt, text);
-    assert.strictEqual(reloaded.customPromptUpdatedAt, updatedAt);
-    const publicValue = publicSettings(reloaded);
-    assert.strictEqual(publicValue.promptTier, '3');
-    assert.strictEqual(publicValue.contextMode, '512k');
-    assert.ok(!Object.hasOwn(publicValue, 'customSystemPrompt'));
-    assert.ok(!Object.hasOwn(publicValue, 'customPromptUpdatedAt'));
-    assert.strictEqual(JSON.stringify(publicValue).includes(text), false);
-    const cleared = settings.update({ customSystemPrompt: '', customPromptUpdatedAt: 0 });
-    assert.strictEqual(cleared.customSystemPrompt, '');
-    assert.strictEqual(cleared.customPromptUpdatedAt, 0);
+    const loaded = settings.get();
+    assert.strictEqual(loaded.promptTier, 'stock', '一个已打开的自定义档位回落到官方原版，而不是整体重置');
+    assert.strictEqual(loaded.contextMode, '512k');
+    assert.ok(!Object.hasOwn(loaded, 'customSystemPrompt'));
+    assert.ok(!Object.hasOwn(loaded, 'customPromptUpdatedAt'));
+    assert.strictEqual(JSON.stringify(publicSettings(loaded)).includes(text), false);
+    // The next write drops the retired keys instead of carrying them forward.
+    settings.update({ port: 7891 });
+    const rewritten = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.strictEqual(rewritten.port, 7891);
+    assert.strictEqual(rewritten.promptTier, 'stock');
+    assert.ok(!Object.hasOwn(rewritten, 'customSystemPrompt'));
+    assert.ok(!Object.hasOwn(rewritten, 'customPromptUpdatedAt'));
   });
-  for (const value of [null, 1, true, {}, [], 'x'.repeat(3970), 'has' + String.fromCharCode(0) + 'nul', '{{ template }}', 'a }} b']) {
-    assert.throws(() => normalizeSettings({ customSystemPrompt: value }));
-  }
-  assert.throws(() => normalizeSettings({ customSystemPrompt: text, customPromptUpdatedAt: -1 }));
-  assert.throws(() => normalizeSettings({ customSystemPrompt: text, customPromptUpdatedAt: 1.5 }));
-  assert.strictEqual(normalizeSettings({ customSystemPrompt: '' }).customSystemPrompt, '');
+  // Retired keys are ignored rather than rejected, whatever shape an older client sends.
+  for (const value of [null, 1, true, {}, [], 'x'.repeat(3970), '{{ template }}'])
+    assert.doesNotThrow(() => normalizeSettings({ customSystemPrompt: value }));
 });

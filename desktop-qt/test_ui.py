@@ -404,18 +404,19 @@ class FrontendRegressionTests(unittest.TestCase):
                 self.assertFalse(w.clear_tunnel_token_button.isEnabled())
                 self.assertIn("暂不可用", w.tunnel_token_status.text())
 
-    def test_visible_prompt_tiers_context_labels_and_custom_metadata(self):
+    def test_visible_prompt_tiers_offer_only_stock_and_compact(self):
         w = self.window
-        self.assertEqual([key for _, key in w.tier._items], ["stock", "3", "custom"])
-        self.assertEqual([text for text, _ in w.tier._items], ["官方原版", "精简·防编造", "自定义上传"])
+        self.assertEqual([key for _, key in w.tier._items], ["stock", "3"])
+        self.assertEqual([text for text, _ in w.tier._items], ["官方原版", "精简·防编造"])
+        # The removed custom tier must not survive as a hidden control in the window.
+        self.assertFalse(hasattr(w, "custom_prompt_button"))
+        self.assertFalse(hasattr(w, "custom_prompt_status_label"))
+        self.assertFalse(hasattr(w, "_custom_prompt_draft"))
         self.assertEqual([key for _, key in w.context._items], ["stock", "512k", "900k"])
         self.assertIn("1M", w.context._items[2][0])
         self.assertIn("1M", w.CTX_HINTS["900k"])
         self.assertIn("983,040", w.CTX_HINTS["900k"])
         self.assertIn("512,000", w.CTX_HINTS["512k"])
-        self.assertTrue(hasattr(w, "custom_prompt_button"))
-        self.assertTrue(hasattr(w, "custom_prompt_status_label"))
-        self.assertEqual(w._custom_capacity, 3960)
 
     def test_three_prompt_choices_preserve_legacy_read_without_silent_selection(self):
         w = self.window
@@ -439,51 +440,22 @@ class FrontendRegressionTests(unittest.TestCase):
         self.assertEqual(payload["promptTier"], "3")
         self.assertNotIn("promptText", payload)
 
-    def test_custom_apply_sends_prompt_text(self):
+    def test_kernel_apply_sends_exactly_the_two_axes(self):
         w = self.window
         w.confirm = lambda *args: True
-        text = "本地自定义核心指令：先读取再断言。"
-        ok, message = w.validate_custom_prompt(text)
-        self.assertTrue(ok, message)
-        w._custom_prompt_draft = text
-        w.tier.setCurrentIndex(w.tier.findData("custom"))
+        w.tier.setCurrentIndex(w.tier.findData("3"))
+        w.context.setCurrentIndex(w.context.findData("900k"))
         w.apply_kernel()
-        payload = self.client.calls[-1][2]
-        self.assertEqual(payload["promptTier"], "custom")
-        self.assertEqual(payload["promptText"], text)
+        self.assertEqual(self.client.calls[-1][2], {"promptTier": "3", "contextMode": "900k"})
 
-    def test_restore_clears_custom_prompt(self):
+    def test_restore_sends_the_stock_axes_only(self):
         w = self.window
         w.confirm = lambda *args: True
         w.apply_kernel(restore=True)
         self.assertEqual(
             self.client.calls[-1][2],
-            {"promptTier": "stock", "contextMode": "stock", "clearCustomPrompt": True},
+            {"promptTier": "stock", "contextMode": "stock"},
         )
-
-    def test_custom_validation_and_file_reader_follow_contract(self):
-        w = self.window
-        for bad in ["", "   ", "a\x00b", "{{ go }}", "x }} y", "z" * (w._custom_capacity + 1)]:
-            with self.subTest(bad=bad[:12]):
-                ok, _msg = w.validate_custom_prompt(bad)
-                self.assertFalse(ok)
-        ok, _msg = w.validate_custom_prompt(b"\xef\xbb\xbf" + "有效文本".encode("utf-8"))
-        self.assertTrue(ok, "UTF-8-BOM bytes are accepted")
-        with tempfile.TemporaryDirectory() as tmp:
-            good = os.path.join(tmp, "prompt.md")
-            with open(good, "wb") as handle:
-                handle.write(b"\xef\xbb\xbf" + "带 BOM 的文本".encode("utf-8"))
-            self.assertEqual(w._read_custom_prompt_file(good), "带 BOM 的文本")
-            bad_ext = os.path.join(tmp, "prompt.exe")
-            with open(bad_ext, "wb") as handle:
-                handle.write(b"text")
-            with self.assertRaises(ValueError):
-                w._read_custom_prompt_file(bad_ext)
-            bad_utf8 = os.path.join(tmp, "bad.txt")
-            with open(bad_utf8, "wb") as handle:
-                handle.write(b"\xff\xfe\x00not-utf8")
-            with self.assertRaises(ValueError):
-                w._read_custom_prompt_file(bad_utf8)
 
     def test_fixed_token_form_is_reachable_in_both_themes_at_minimum_size(self):
         w = self.window

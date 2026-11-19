@@ -107,7 +107,7 @@ def main():
     check(all(w.nav_group.id(b) == i for i, b in enumerate(w.nav_buttons)), "nav button group ids 0..3")
     check(isinstance(w.tier, SegmentedControl) and isinstance(w.context, SegmentedControl),
           "kernel tier and context use Liquid Glass SegmentedControl")
-    check([key for _, key in w.tier._items] == ["stock", "3", "custom"], "visible prompt tier keys")
+    check([key for _, key in w.tier._items] == ["stock", "3"], "visible prompt tier keys")
     check([key for _, key in w.context._items] == ["stock", "512k", "900k"], "context mode keys")
     check("1M" in w.context._items[2][0], "900K / 1M context label")
     check(isinstance(w.preflight, ToggleSwitch) and isinstance(w.i18n, ToggleSwitch),
@@ -172,7 +172,7 @@ def main():
     check(len(fake.calls) == before, "cancelled kernel confirmation never mutates")
     w.confirm = lambda *args: True
     w.apply_kernel(restore=True)
-    check(fake.calls[-1][2] == {"promptTier": "stock", "contextMode": "stock", "clearCustomPrompt": True}, "restore exact kernel axes and clear custom prompt")
+    check(fake.calls[-1][2] == {"promptTier": "stock", "contextMode": "stock"}, "restore exact kernel axes")
     fake.error.emit("kernel-apply", "模拟取消")
 
     # Accounts: cards, inline quota bars, search, quota sort, OAuth URL validation.

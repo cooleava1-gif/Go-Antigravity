@@ -65,7 +65,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows.ps1 
 Get-Content dist/Go-Antigravity-windows-x64/runtime/manifest.json
 ~~~
 
-脚本会生成 `dist/Go-Antigravity-windows-x64/` 和同名 ZIP。包内入口是 `Go-Antigravity.exe`，包内运行时目录是 `runtime/node/` 与 `runtime/python/`；账户、设置、日志和自定义系统提示词默认位于 `%LOCALAPPDATA%\Go-Antigravity`。GitHub Actions 的标签发布流程见 `.github/workflows/release-windows.yml`。
+脚本会生成 `dist/Go-Antigravity-windows-x64/` 和同名 ZIP。包内入口是 `Go-Antigravity.exe`，包内运行时目录是 `runtime/node/` 与 `runtime/python/`；账户、设置和日志默认位于 `%LOCALAPPDATA%\Go-Antigravity`。GitHub Actions 的标签发布流程见 `.github/workflows/release-windows.yml`。
 
 ## 无需 TUN 的已验证范围
 
