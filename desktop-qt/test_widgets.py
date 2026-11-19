@@ -355,7 +355,14 @@ class AccountIdentityLayoutTests(unittest.TestCase):
                         window.resize(width, height)
                         window.settle_animations()
                         self.app.processEvents()
-                        self.assertEqual((window.width(), window.height()), (width, height))
+                        desktop = self.app.primaryScreen()
+                        desktop = desktop.availableGeometry() if desktop else None
+                        if desktop is None or (width <= desktop.width() and height <= desktop.height()):
+                            self.assertEqual((window.width(), window.height()), (width, height))
+                        else:
+                            # A real window manager clamps the frame to the screen (CI desktops are
+                            # 1024 wide); the offscreen platform keeps the requested size.
+                            self.assertGreaterEqual(window.width(), min(width, desktop.width()))
                         self.assertFalse(hasattr(window, "quota_detail"))
                         scroll = window.accounts_scroll
                         self.assertEqual(scroll.horizontalScrollBar().maximum(), 0)
