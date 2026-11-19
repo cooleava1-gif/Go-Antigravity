@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$OutputDirectory = (Join-Path (Split-Path -Parent $PSScriptRoot) 'dist'),
+    [string]$OutputDirectory = '',
     [string]$Version = '',
     [string]$NodeSource = '',
     [string]$PythonSource = '',
@@ -11,6 +11,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $script:ProjectRoot = Split-Path -Parent $PSScriptRoot
 $script:PackageName = 'Go-Antigravity-windows-x64'
+if (-not $OutputDirectory) { $OutputDirectory = Join-Path $script:ProjectRoot 'dist' }
 
 function Fail([string]$Message) {
     throw "Windows package build failed: $Message"
