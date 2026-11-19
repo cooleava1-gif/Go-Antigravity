@@ -32,16 +32,16 @@ test('fixed URL and mode validation reject unsafe configuration',()=>{
  assert.equal(parseFixedUrl('https://mobile.example.com/'),'https://mobile.example.com');
  for(const bad of ['http://example.com','https://localhost','https://127.0.0.1','https://[::1]','https://host.local','https://u:p@example.com','https://example.com/a','https://example.com?x','https://example.com:443','https://example.com#x','https://example.com\\evil',' HTTPS://example.com']) assert.throws(()=>parseFixedUrl(bad));
  assert.deepEqual(parseRuntimeOptions({}),{mode:'quick',publicUrl:null,config:null});
- assert.throws(()=>parseRuntimeOptions({GOAGY_POCKET_MODE:'other'}));
- assert.throws(()=>parseRuntimeOptions({GOAGY_POCKET_MODE:'fixed',GOAGY_POCKET_FIXED_URL:'https://mobile.example.com'}),/FIXED_CONFIG_REQUIRED/);
- const env={GOAGY_POCKET_MODE:'fixed',GOAGY_POCKET_FIXED_URL:'https://mobile.example.com',GOAGY_POCKET_CF_CONFIG:process.platform==='win32'?'C:/outside/tunnel.yaml':'/outside/tunnel.yaml'};
+ assert.throws(()=>parseRuntimeOptions({GO_ANTIGRAVITY_MOBILE_MODE:'other'}));
+ assert.throws(()=>parseRuntimeOptions({GO_ANTIGRAVITY_MOBILE_MODE:'fixed',GO_ANTIGRAVITY_MOBILE_FIXED_URL:'https://mobile.example.com'}),/FIXED_CONFIG_REQUIRED/);
+ const env={GO_ANTIGRAVITY_MOBILE_MODE:'fixed',GO_ANTIGRAVITY_MOBILE_FIXED_URL:'https://mobile.example.com',GO_ANTIGRAVITY_MOBILE_CF_CONFIG:process.platform==='win32'?'C:/outside/tunnel.yaml':'/outside/tunnel.yaml'};
  assert.equal(parseRuntimeOptions(env).mode,'fixed');
- assert.throws(()=>parseRuntimeOptions({...env,GOAGY_POCKET_CF_CONFIG:'relative.yml'}));
+ assert.throws(()=>parseRuntimeOptions({...env,GO_ANTIGRAVITY_MOBILE_CF_CONFIG:'relative.yml'}));
 });
 test('CLI ordering isolates quick config and keeps fixed run after all tunnel flags',()=>{
  const quick=buildCloudflaredArgs({mode:'quick'}); assert.equal(quick[0],'tunnel');assert.equal(quick[1],'--config');assert.match(quick[2],/quick-config.yml$/);assert.ok(quick.includes(LOCAL_URL));assert.equal(quick.includes('run'),false);
  assert.deepEqual(buildCloudflaredArgs({mode:'fixed',config:'/external/tunnel.yml'}),['tunnel','--config','/external/tunnel.yml','--metrics','127.0.0.1:20382','--no-autoupdate','--protocol','http2','run']);
- assert.deepEqual(cloudflaredEnvironment({PATH:'bin',TUNNEL_CONFIG:'secret',TUNNEL_TOKEN:'secret',CF_TUNNEL:'secret',GOAGY_POCKET_PIN:'12345678'},'quick'),{PATH:'bin'});
+ assert.deepEqual(cloudflaredEnvironment({PATH:'bin',TUNNEL_CONFIG:'secret',TUNNEL_TOKEN:'secret',CF_TUNNEL:'secret',GO_ANTIGRAVITY_MOBILE_PIN:'12345678'},'quick'),{PATH:'bin'});
 });
 test('external named configuration cannot live inside the repository',async()=>{
  await assert.rejects(validateExternalConfig(new URL('../mobile/quick-config.yml',import.meta.url)),/FIXED_CONFIG_REQUIRED/);
@@ -56,17 +56,17 @@ test('constant-time comparison uses buffer byte length',()=>{assert.equal(consta
 test('guest and expired browser deep links reopen PIN login while APIs stay unauthorized',async(t)=>{
  let discoveries=0,now=0;
  const runtime=createMobileServer({pin:'12345678',adapter:{discover:async()=>{discoveries++;throw Error('must not discover');}},now:()=>now}),base=await listen(runtime.server);t.after(()=>runtime.close());
- for(const path of ['/goagy-pocket','/goagy-pocket/','/c/saved-conversation']){
+ for(const path of ['/mobile','/mobile/','/c/saved-conversation']){
   const response=await http(base,path);assert.equal(response.status,200,path);assert.match(response.headers['content-type'],/text\/html/);assert.match(response.body,/action="\/pocket-login"/);assert.equal(response.headers['cache-control'],'no-store');
  }
  const navigation=await http(base,'/saved-page',{headers:{'sec-fetch-dest':'document',accept:'text/html'}});assert.equal(navigation.status,200);assert.match(navigation.body,/pocket-login/);
- const head=await http(base,'/goagy-pocket/',{method:'HEAD'});assert.equal(head.status,200);assert.equal(head.body,'');
- for(const path of ['/goagy-pocket/api/status','/api/private','/assets/app.js']){const response=await http(base,path,{headers:{accept:'application/json'}});assert.equal(response.status,401,path);assert.match(response.headers['content-type'],/application\/json/);}
+ const head=await http(base,'/mobile/',{method:'HEAD'});assert.equal(head.status,200);assert.equal(head.body,'');
+ for(const path of ['/mobile/api/status','/api/private','/assets/app.js']){const response=await http(base,path,{headers:{accept:'application/json'}});assert.equal(response.status,401,path);assert.match(response.headers['content-type'],/application\/json/);}
  assert.equal((await http(base,'/c/saved-conversation',{method:'POST'})).status,401);
  const login=await http(base,'/pocket-login',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'token=12345678'}),cookie=login.headers['set-cookie'][0].split(';')[0];
  now=13*60*60*1000;
- const expired=await http(base,'/goagy-pocket/',{headers:{cookie}});assert.equal(expired.status,200);assert.match(expired.body,/action="\/pocket-login"/);
- assert.equal((await http(base,'/goagy-pocket/api/status',{headers:{cookie}})).status,401);assert.equal(discoveries,0);
+ const expired=await http(base,'/mobile/',{headers:{cookie}});assert.equal(expired.status,200);assert.match(expired.body,/action="\/pocket-login"/);
+ assert.equal((await http(base,'/mobile/api/status',{headers:{cookie}})).status,401);assert.equal(discoveries,0);
 });
 test('compatibility authentication recovery links point to the PIN page',async()=>{
  const html=await readFile(new URL('../mobile/web/index.html',import.meta.url),'utf8'),source=await readFile(new URL('../mobile/web/app.js',import.meta.url),'utf8');
@@ -81,18 +81,18 @@ test('guest/login/native/compatibility/WS authentication and 12-hour renewal',as
  const adapter={discover:async()=>{discovery++;return{base:nativeBase,token:'native-test-only'};},status:async()=>({connected:true}),sessions:async()=>({sessions:[]})};
  const runtime=createMobileServer({pin:'12345678',adapter,now:()=>now}),base=await listen(runtime.server);t.after(()=>runtime.close());
  const guest=await http(base,'/');assert.equal(guest.status,200);assert.match(guest.body,/pocket-login/);assert.equal(discovery,0);
- assert.equal((await http(base,'/api/private')).status,401);assert.equal((await http(base,'/goagy-pocket/api/status?token=12345678')).status,401);
+ assert.equal((await http(base,'/api/private')).status,401);assert.equal((await http(base,'/mobile/api/status?token=12345678')).status,401);
  assert.ok((await upgrade(base)).startsWith('HTTP/1.1 401'));assert.equal(discovery,0);
  assert.equal((await http(base,'/pocket-login',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'token=invalid1'})).status,401);
  const login=()=>http(base,'/pocket-login',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded','x-forwarded-proto':'https'},body:'token=12345678'});
  const logged=await login();assert.equal(logged.status,302);assert.equal(logged.headers.location,'/');assert.match(logged.headers['set-cookie'][0],/HttpOnly; SameSite=Strict/);assert.match(logged.headers['set-cookie'][0],/; Secure/);
  let cookie=logged.headers['set-cookie'][0].split(';')[0];
  assert.equal((await http(base,'/?wsTransport=3',{headers:{cookie}})).body,'native-ok');
- assert.equal((await http(base,'/goagy-pocket/',{headers:{cookie}})).status,200);
- assert.equal((await http(base,'/goagy-pocket/api/status',{headers:{cookie}})).status,200);
+ assert.equal((await http(base,'/mobile/',{headers:{cookie}})).status,200);
+ assert.equal((await http(base,'/mobile/api/status',{headers:{cookie}})).status,200);
  assert.ok((await upgrade(base,cookie)).startsWith('HTTP/1.1 101'));
- now=13*60*60*1000;assert.equal((await http(base,'/goagy-pocket/api/status',{headers:{cookie}})).status,401);
- const renewed=await login();cookie=renewed.headers['set-cookie'][0].split(';')[0];assert.equal((await http(base,'/goagy-pocket/api/status',{headers:{cookie}})).status,200);
+ now=13*60*60*1000;assert.equal((await http(base,'/mobile/api/status',{headers:{cookie}})).status,401);
+ const renewed=await login();cookie=renewed.headers['set-cookie'][0].split(';')[0];assert.equal((await http(base,'/mobile/api/status',{headers:{cookie}})).status,200);
 });
 test('browser form keeps a same-origin Origin while opaque and foreign origins stay blocked',async(t)=>{
  const runtime=createMobileServer({pin:'12345678',adapter:{}}),base=await listen(runtime.server);t.after(()=>runtime.close());
@@ -182,14 +182,14 @@ test('session expiry actively closes both WS peers, native HTTP streams and comp
  const cookie=await loginCookie(base),pair=await websocketPair(base,wss,cookie);
  const echoed=new Promise(resolve=>pair.client.once('message',data=>resolve(data.toString())));pair.client.send('synthetic-message');assert.equal(await echoed,'synthetic-message');
  const pushed=new Promise(resolve=>pair.client.once('message',data=>resolve(data.toString())));pair.upstream.send('synthetic-push');assert.equal(await pushed,'synthetic-push');
- const native=await openStream(base,'/stream',cookie),sse=await openStream(base,'/goagy-pocket/api/events',cookie);
+ const native=await openStream(base,'/stream',cookie),sse=await openStream(base,'/mobile/api/events',cookie);
  const clientClosed=new Promise(resolve=>pair.client.once('close',resolve)),peerClosed=new Promise(resolve=>pair.upstream.once('close',resolve)),nativeClosed=new Promise(resolve=>upstreamResponses[0].once('close',resolve));
- assert.equal(clock.pending.size,1);assert.ok(upstreamCookies.every(value=>!value.includes('goagy_pocket_session')));
+ assert.equal(clock.pending.size,1);assert.ok(upstreamCookies.every(value=>!value.includes('go_antigravity_mobile_session')));
  clock.advance(12*60*60*1000);
  await Promise.all([clientClosed,peerClosed,native.closed,sse.closed,nativeClosed]);
  assert.equal(clock.pending.size,0);assert.equal(pair.client.readyState,WebSocket.CLOSED);assert.equal(pair.upstream.readyState,WebSocket.CLOSED);
- assert.equal((await http(base,'/goagy-pocket/api/status',{headers:{cookie}})).status,401);assert.ok((await upgrade(base,cookie)).startsWith('HTTP/1.1 401'));
- const renewed=await loginCookie(base);assert.equal((await http(base,'/goagy-pocket/api/status',{headers:{cookie:renewed}})).status,200);
+ assert.equal((await http(base,'/mobile/api/status',{headers:{cookie}})).status,401);assert.ok((await upgrade(base,cookie)).startsWith('HTTP/1.1 401'));
+ const renewed=await loginCookie(base);assert.equal((await http(base,'/mobile/api/status',{headers:{cookie:renewed}})).status,200);
 });
 test('closed resources clear expiry timers and direct server.close disconnects active upgraded sockets', {timeout:10000},async(t)=>{
  const clock=fakeSessionClock(),upstream=createServer(),wss=new WebSocketServer({server:upstream}),nativeBase=await listen(upstream);
@@ -232,13 +232,13 @@ test('quick readiness requires exact URL and metrics, emits only sanitized JSON,
  await f.supervisor.stop();assert.equal(await f.supervisor.done,0);assert.ok(f.children.every(c=>c.kills.includes('SIGTERM')));
 });
 test('fixed mode uses configured origin and ignores cloudflared URL output',async()=>{
- const config=process.platform==='win32'?'C:/outside/local.yml':'/outside/local.yml';const f=fixture({env:{GOAGY_POCKET_MODE:'fixed',GOAGY_POCKET_FIXED_URL:'https://mobile.example.com',GOAGY_POCKET_CF_CONFIG:config}}),start=f.supervisor.start();await f.serverReady();f.children[1].stderr.write('https://ignored.trycloudflare.com\n');f.setHealthy();assert.equal((await start).publicUrl,'https://mobile.example.com');assert.equal(f.calls[1].args.at(-1),'run');await f.supervisor.stop();
+ const config=process.platform==='win32'?'C:/outside/local.yml':'/outside/local.yml';const f=fixture({env:{GO_ANTIGRAVITY_MOBILE_MODE:'fixed',GO_ANTIGRAVITY_MOBILE_FIXED_URL:'https://mobile.example.com',GO_ANTIGRAVITY_MOBILE_CF_CONFIG:config}}),start=f.supervisor.start();await f.serverReady();f.children[1].stderr.write('https://ignored.trycloudflare.com\n');f.setHealthy();assert.equal((await start).publicUrl,'https://mobile.example.com');assert.equal(f.calls[1].args.at(-1),'run');await f.supervisor.stop();
 });
 test('fatal child exit cleans sibling and emits canned error',async()=>{
  const f=fixture({retryMs:1}),start=f.supervisor.start();await f.serverReady();f.children[1].die();await new Promise(resolve=>setTimeout(resolve,5));f.children[2].die();await assert.rejects(start,/TUNNEL_START_FAILED/);assert.equal(await f.supervisor.done,1);assert.deepEqual(f.records.at(-1),{error:'TUNNEL_START_FAILED'});assert.ok(f.children[0].kills.length);
 });
 test('cloudflared missing, startup timeout, invalid fixed mode and cancellation fail cleanly',async()=>{
- for(const opts of [{resolveBinary:async()=>{throw Object.assign(Error('private path'),{code:'CLOUDFLARED_NOT_FOUND'});}},{tunnelTimeout:10},{env:{GOAGY_POCKET_MODE:'fixed'}}]){
+ for(const opts of [{resolveBinary:async()=>{throw Object.assign(Error('private path'),{code:'CLOUDFLARED_NOT_FOUND'});}},{tunnelTimeout:10},{env:{GO_ANTIGRAVITY_MOBILE_MODE:'fixed'}}]){
   const f=fixture(opts),start=f.supervisor.start(),rejected=assert.rejects(start);if(!opts.env)await f.serverReady();await rejected;await f.supervisor.done;assert.ok(f.records.at(-1).error);assert.equal(JSON.stringify(f.records).includes('private path'),false);
  }
  const f=fixture(),start=f.supervisor.start(),rejected=assert.rejects(start);await immediate();await f.supervisor.stop();await rejected;assert.equal(await f.supervisor.done,0);assert.ok(f.children[0].kills.length);

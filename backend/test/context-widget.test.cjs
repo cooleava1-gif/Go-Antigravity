@@ -63,7 +63,7 @@ function fixture({ width = 900, height = 800, background = 'rgb(30, 30, 30)', co
   vm.runInContext('(' + installContextWidget.toString() + ')(window, document, true, report)', context);
   return { win, doc, row, anchor, send, calls, events, node: () => doc.created[0], shadow: () => doc.created[0].shadowRoot,
     advance(ms = 4000) { now += ms; tick?.(); }, mutate() { observer?.([{ target: body }]); frame?.(); frame = null; },
-    receive(payload = {}) { const request = calls[calls.length - 1]; win.__goagyContext.receive(request.requestId, { conversationId: request.conversationId, state: 'live', sampledAt: now, ...payload }); },
+    receive(payload = {}) { const request = calls[calls.length - 1]; win.__goAntigravityContext.receive(request.requestId, { conversationId: request.conversationId, state: 'live', sampledAt: now, ...payload }); },
     now: () => now };
 }
 
@@ -78,11 +78,11 @@ test('serialized renderer mounts one compact ring with adjacent percentage and n
   assert.equal(shadow.getElementById('context-value').textContent, '50%');
   assert.equal(shadow.getElementById('context-percent').textContent, '50%');
   assert.match(shadow.getElementById('usage').textContent, /约 151K \/ 300K tokens/);
-  assert.doesNotMatch(shadow.html, /<text|ring-number|Goagy/);
+  assert.doesNotMatch(shadow.html, /<text|ring-number|Go-Antigravity/);
   assert.match(shadow.html, /width:12px;height:12px/);
   assert.match(shadow.html, /估算/);
   assert.match(shadow.getElementById('trigger').attributes['aria-label'], /上下文已用约 50%/);
-  assert.equal(f.row.children.filter(x => x.id === 'goagy-context-monitor').length, 1);
+  assert.equal(f.row.children.filter(x => x.id === 'go-antigravity-context-monitor').length, 1);
 });
 
 test('popover keeps only key measurable conversation data and removes unavailable breakdowns', () => {
@@ -142,7 +142,7 @@ test('route changes clear old totals, hide popover, and reject in-flight results
   assert.equal(s.getElementById('context-value').textContent, '—');
   assert.equal(s.getElementById('input').textContent, '');
   assert.equal(s.getElementById('input-row').hidden, true);
-  f.win.__goagyContext.receive(stale.requestId, { ...sample, conversationId: ID });
+  f.win.__goAntigravityContext.receive(stale.requestId, { ...sample, conversationId: ID });
   assert.equal(s.getElementById('context-value').textContent, '—');
   assert.equal(f.calls[f.calls.length-1].conversationId, OTHER);
   f.receive({ ...sample, context: { usedTokens: 1, maxTokens: 10, usedFraction: 0.1 } });
@@ -170,9 +170,9 @@ test('collision, invalid routes, repeated injection and disposal preserve host c
   f.win.location.pathname='/settings'; f.advance();
   assert.equal(f.node().isConnected,false);
   const calls=f.calls.length; f.advance(); assert.equal(f.calls.length,calls);
-  f.win.__goagyContext.dispose(); assert.equal(f.win.__goagyContext,undefined);
+  f.win.__goAntigravityContext.dispose(); assert.equal(f.win.__goAntigravityContext,undefined);
   assert.equal(f.anchor.isConnected,true); assert.equal(f.send.isConnected,true);
   let disposed=0;
-  installContextWidget({__goagyContext:{dispose(){disposed++;}}},{},false,()=>{});
+  installContextWidget({__goAntigravityContext:{dispose(){disposed++;}}},{},false,()=>{});
   assert.equal(disposed,1);
 });

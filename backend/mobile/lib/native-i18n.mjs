@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 
-export const NATIVE_I18N_PATH = '/__goagy-pocket/zh-cn.js';
+export const NATIVE_I18N_PATH = '/__go-antigravity-mobile/zh-cn.js';
 
 const nativeLabels = {
   'Start Voice mode': '启动语音模式',
@@ -26,11 +26,11 @@ function loadDictionary() {
   return Object.assign(dictionary, nativeLabels);
 }
 
-// Adapted from the bundled upstream MIT-licensed installI18n implementation; see vendor provenance.
+// Adapted from the bundled MIT-licensed installI18n implementation; see vendor provenance.
 // Serialized as an external browser asset: no Node globals, tokens or requests.
 function installChineseLocalization(dictionary) {
   'use strict';
-  const runtimeKey = '__goagyPocketChineseLocalization';
+  const runtimeKey = '__goAntigravityMobileChineseLocalization';
   if (window[runtimeKey]) return;
   const attributes = ['placeholder', 'title', 'aria-label', 'data-placeholder'];
   const actualMessage = '[data-testid=user-message-content],[data-testid=planner-response-text],[data-quotable=true],[data-markdown-root]';

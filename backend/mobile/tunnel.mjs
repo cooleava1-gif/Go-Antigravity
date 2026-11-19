@@ -27,16 +27,16 @@ export function parseFixedUrl(value) {
   return url.origin;
 }
 export function parseRuntimeOptions(env = process.env) {
-  const mode = env.GOAGY_POCKET_MODE === undefined || env.GOAGY_POCKET_MODE === '' ? 'quick' : env.GOAGY_POCKET_MODE;
+  const mode = env.GO_ANTIGRAVITY_MOBILE_MODE === undefined || env.GO_ANTIGRAVITY_MOBILE_MODE === '' ? 'quick' : env.GO_ANTIGRAVITY_MOBILE_MODE;
   if (mode !== 'quick' && mode !== 'fixed') throw fail('TUNNEL_START_FAILED');
   if (mode === 'quick') return { mode, publicUrl: null, config: null };
   if (env.TUNNEL_TOKEN) {
     try { validateTunnelToken(env.TUNNEL_TOKEN); } catch { throw fail('FIXED_CONFIG_REQUIRED'); }
-    return { mode, publicUrl: parseFixedUrl(env.GOAGY_POCKET_FIXED_URL), config: null, auth: 'token' };
+    return { mode, publicUrl: parseFixedUrl(env.GO_ANTIGRAVITY_MOBILE_FIXED_URL), config: null, auth: 'token' };
   }
-  if (!env.GOAGY_POCKET_CF_CONFIG) throw fail('FIXED_CONFIG_REQUIRED');
-  if (!isAbsolute(env.GOAGY_POCKET_CF_CONFIG) || !/\.ya?ml$/i.test(env.GOAGY_POCKET_CF_CONFIG) || /[\u0000-\u001f]/.test(env.GOAGY_POCKET_CF_CONFIG)) throw fail('FIXED_CONFIG_REQUIRED');
-  return { mode, publicUrl: parseFixedUrl(env.GOAGY_POCKET_FIXED_URL), config: env.GOAGY_POCKET_CF_CONFIG };
+  if (!env.GO_ANTIGRAVITY_MOBILE_CF_CONFIG) throw fail('FIXED_CONFIG_REQUIRED');
+  if (!isAbsolute(env.GO_ANTIGRAVITY_MOBILE_CF_CONFIG) || !/\.ya?ml$/i.test(env.GO_ANTIGRAVITY_MOBILE_CF_CONFIG) || /[\u0000-\u001f]/.test(env.GO_ANTIGRAVITY_MOBILE_CF_CONFIG)) throw fail('FIXED_CONFIG_REQUIRED');
+  return { mode, publicUrl: parseFixedUrl(env.GO_ANTIGRAVITY_MOBILE_FIXED_URL), config: env.GO_ANTIGRAVITY_MOBILE_CF_CONFIG };
 }
 export async function validateExternalConfig(path, root = repository) {
   try {
@@ -59,17 +59,17 @@ export function cloudflaredEnvironment(env, mode) {
   // Connector transports must not inherit loopback interception proxies or the mobile server PIN.
   return Object.fromEntries(Object.entries(env).filter(([key]) =>
     !/^(?:https?|all|no)_proxy$/i.test(key) &&
-    !/^GOAGY_POCKET_/i.test(key) &&
+    !/^GO_ANTIGRAVITY_MOBILE_/i.test(key) &&
     (mode === 'fixed' || !/^(?:TUNNEL_|CF_TUNNEL|CLOUDFLARED_)/i.test(key))));
 }
 export function originEnvironment(env) {
   return Object.fromEntries(Object.entries(env).filter(([key]) =>
-    !/^(?:TUNNEL_|CF_TUNNEL|CLOUDFLARED_|GOAGY_POCKET_(?:CF_CONFIG|TUNNEL_TOKEN))/i.test(key)));
+    !/^(?:TUNNEL_|CF_TUNNEL|CLOUDFLARED_|GO_ANTIGRAVITY_MOBILE_(?:CF_CONFIG|TUNNEL_TOKEN))/i.test(key)));
 }
 export async function findCloudflared(env = process.env, platform = process.platform) {
   const exe = platform === 'win32' ? 'cloudflared.exe' : 'cloudflared';
   const candidates = [];
-  if (env.GOAGY_CLOUDFLARED) candidates.push(env.GOAGY_CLOUDFLARED);
+  if (env.GO_ANTIGRAVITY_CLOUDFLARED) candidates.push(env.GO_ANTIGRAVITY_CLOUDFLARED);
   else {
     if (platform === 'win32') {
       for (const base of [env.ProgramFiles, env['ProgramFiles(x86)']]) if (base) candidates.push(join(base, 'cloudflared', exe));

@@ -9,7 +9,7 @@ export function createEventStream({onStatus,onSessions,onSnapshot,onSyncError,on
   if(stopped||blocked()||version!==generation)return;const request=new AbortController();controller=request;const timeout=setTimeout(()=>request.abort(),25000),current=()=>!stopped&&!blocked()&&version===generation&&controller===request;
   try{
    const query=new URLSearchParams();if(session)query.set('session',session);if(cursor)query.set('cursor',cursor);
-   const response=await fetch('/goagy-pocket/api/live?'+query,{signal:request.signal,cache:'no-store',credentials:'same-origin',headers:{accept:'application/json'}});
+   const response=await fetch('/mobile/api/live?'+query,{signal:request.signal,cache:'no-store',credentials:'same-origin',headers:{accept:'application/json'}});
    if(!current())return;
    if(response.status===401){onSyncError({status:401,error:'身份验证已失效，请重新验证。'});stop();return;}
    if(!response.ok)throw Error('实时同步暂时不可用');const result=await response.json();if(!current())return;if(!Array.isArray(result.events)||typeof result.cursor!=='string')throw Error('实时数据格式不正确');cursor=result.cursor;failures=0;stopPolling();

@@ -22,15 +22,15 @@ export function createMobileServer({ pin = String(randomInt(10000000, 100000000)
       }
       if (!auth.authorize(req)) {
         const read = req.method === 'GET' || req.method === 'HEAD';
-        const api = path === '/api' || path.startsWith('/api/') || path === '/goagy-pocket/api' || path.startsWith('/goagy-pocket/api/');
-        const appPage = path === '/' || path === '/goagy-pocket' || path === '/goagy-pocket/' || path.startsWith('/c/');
+        const api = path === '/api' || path.startsWith('/api/') || path === '/mobile/api' || path.startsWith('/mobile/api/');
+        const appPage = path === '/' || path === '/mobile' || path === '/mobile/' || path.startsWith('/c/');
         const navigation = req.headers['sec-fetch-dest'] === 'document' || req.headers['sec-fetch-mode'] === 'navigate' || /(?:^|,)\s*text\/html(?:\s*;|\s*,|$)/i.test(String(req.headers.accept || ''));
         if (read && !api && (appPage || navigation)) auth.loginPage(req, res);
         else { res.writeHead(401, { 'cache-control': 'no-store', 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ error: '请先完成 Pocket 登录' })); }
         return;
       }
       if (Number(req.headers['content-length'] || 0) > 16 * 1024 * 1024) { res.writeHead(413); res.end('Request too large'); req.resume(); return; }
-      await (path === '/goagy-pocket' || path.startsWith('/goagy-pocket/') ? compatibility(req, res) : native.handle(req, res));
+      await (path === '/mobile' || path.startsWith('/mobile/') ? compatibility(req, res) : native.handle(req, res));
     })().catch(() => { if (!res.headersSent) res.writeHead(400, { 'cache-control': 'no-store' }); if (!res.writableEnded) res.end('Invalid request'); });
   });
   server.requestTimeout = 30000;
@@ -57,7 +57,7 @@ export function createMobileServer({ pin = String(randomInt(10000000, 100000000)
   return { server, pin, close };
 }
 export async function startServer({ env = process.env, emit = value => console.log(JSON.stringify(value)) } = {}) {
-  const runtime = createMobileServer({ pin: env.GOAGY_POCKET_PIN || undefined });
+  const runtime = createMobileServer({ pin: env.GO_ANTIGRAVITY_MOBILE_PIN || undefined });
   try { await new Promise((resolve, reject) => { runtime.server.once('error', reject); runtime.server.listen({ port: 3082, host: '127.0.0.1', exclusive: true }, resolve); }); }
   catch { await runtime.close(); throw new Error('SERVER_START_FAILED'); }
   emit({ ready: true, local: 'http://127.0.0.1:3082/', pin: runtime.pin, pid: process.pid });

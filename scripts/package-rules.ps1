@@ -6,7 +6,7 @@ function Test-PackageForbiddenRelativePath {
     $name = [IO.Path]::GetFileName($RelativePath.Replace('/', '\'))
     if ($name -match '^\.env(?:\.|$)|^cert\.pem$|^cloudflared.*\.ya?ml$|credentials.*\.json(?:\.|$)|vault.*\.json(?:\.|$)') { return $true }
     if ($name -match '^(accounts|settings|permission-session|danger-rules)(?:\.json(?:\.|$)|[-_.].*\.json$)') { return $true }
-    return $name -match '(?:\.log(?:\.|$)|\.bak(?:[-.]|$)|\.old_run(?:\.|$)|\.tmp(?:\.|$)|\.recovery(?:[-.]|$)|\.goagy-context\.json$|~$)'
+    return $name -match '(?:\.log(?:\.|$)|\.bak(?:[-.]|$)|\.old_run(?:\.|$)|\.tmp(?:\.|$)|\.recovery(?:[-.]|$)|\.go-antigravity-context\.json$|~$)'
 }
 
 function Get-PackageForbiddenItems {

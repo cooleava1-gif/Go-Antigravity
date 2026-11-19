@@ -150,7 +150,7 @@ def main():
         window.closing.connect(closing)
         QTimer.singleShot(0, runtime.start)
     window.show()
-    ready_file = os.environ.pop("GOAGY_QT_READY_FILE", None)
+    ready_file = os.environ.pop("GO_ANTIGRAVITY_QT_READY_FILE", None)
     if ready_file:
         # The bootstrap owns the directory. A timed-out launch cannot recreate it later.
         QTimer.singleShot(0, lambda: Path(ready_file).touch(exist_ok=False))

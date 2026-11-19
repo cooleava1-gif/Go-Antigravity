@@ -117,7 +117,7 @@ class CdpHub {
     Object.assign(this, { port, profile, source, onStatus, onMetrics, onStop, now, blankGraceMs });
     this.generation = 0;
     this.recoveredPages = new Set();
-    this.binding = '__goagyReport_' + randomUUID().replaceAll('-', '');
+    this.binding = '__goAntigravityReport_' + randomUUID().replaceAll('-', '');
     this.discover = discover || (() => this.findTargets());
     this.sessions = new Map();
     this.running = false;
@@ -192,7 +192,7 @@ class CdpHub {
       const payload = JSON.stringify(result);
       if (payload.length > 8192) return;
       await connection.command('Runtime.evaluate', { contextId,
-        expression: `if (location.href === ${JSON.stringify(href)}) window.__goagyContext?.receive(${JSON.stringify(event.requestId)}, ${payload});` });
+        expression: `if (location.href === ${JSON.stringify(href)}) window.__goAntigravityContext?.receive(${JSON.stringify(event.requestId)}, ${payload});` });
     } catch { /* Stats are optional; never interrupt localization. */ }
     finally { connection.metricsBusy = false; }
   }

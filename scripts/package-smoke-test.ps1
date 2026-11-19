@@ -16,7 +16,7 @@ $tempRoot = Join-Path $tempBase ([IO.Path]::GetRandomFileName())
 $null = New-Item -ItemType Directory -Path $tempRoot
 $environment = @{}
 foreach ($key in @('LOCALAPPDATA', 'GO_ANTIGRAVITY_PACKAGED', 'GO_ANTIGRAVITY_DATA_DIR', 'GO_ANTIGRAVITY_NODE_EXE',
-                   'GOAGY_QT_CONSOLE', 'GOAGY_CLOUDFLARED', 'QT_QPA_PLATFORM', 'PYTHONUTF8', 'PYTHONDONTWRITEBYTECODE')) {
+                   'GO_ANTIGRAVITY_QT_CONSOLE', 'GO_ANTIGRAVITY_CLOUDFLARED', 'QT_QPA_PLATFORM', 'PYTHONUTF8', 'PYTHONDONTWRITEBYTECODE')) {
     $environment[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
 }
 try {
@@ -40,11 +40,11 @@ try {
 
     $env:LOCALAPPDATA = Join-Path $tempRoot 'profile'
     $env:QT_QPA_PLATFORM = 'offscreen'
-    foreach ($key in @('GO_ANTIGRAVITY_PACKAGED','GO_ANTIGRAVITY_DATA_DIR','GOAGY_QT_CONSOLE','GO_ANTIGRAVITY_NODE_EXE')) {
+    foreach ($key in @('GO_ANTIGRAVITY_PACKAGED','GO_ANTIGRAVITY_DATA_DIR','GO_ANTIGRAVITY_QT_CONSOLE','GO_ANTIGRAVITY_NODE_EXE')) {
         [Environment]::SetEnvironmentVariable($key, $null, 'Process')
     }
     . (Join-Path $root 'Start-Go-Antigravity.ps1')
-    Invoke-GoagyBootstrap -ProjectRoot $root -AppArguments @() -PrepareOnly
+    Invoke-AntigravityBootstrap -ProjectRoot $root -AppArguments @() -PrepareOnly
     $node = Join-Path $root $manifest.node.executable
     Assert-Smoke ($env:GO_ANTIGRAVITY_PACKAGED -eq '1' -and $env:GO_ANTIGRAVITY_NODE_EXE -eq $node) 'bootstrap did not select the bundled Node in packaged mode'
 
@@ -61,13 +61,13 @@ assert.equal(resolveDataDirectory(path.join(root,'backend'), process.env), path.
 const db = new DatabaseSync(':memory:');
 try { assert.equal(db.prepare('select 1 as ok').get().ok, 1); } finally { db.close(); }
 '@
-    $result = Invoke-GoagyCommand $node @('-e', $probe, $root, $manifest.node.version)
+    $result = Invoke-AntigravityCommand $node @('-e', $probe, $root, $manifest.node.version)
     Assert-Smoke ($result.ExitCode -eq 0) 'bundled backend or its data directory failed'
     $python = Join-Path $root 'runtime/python/python.exe'
-    $result = Invoke-GoagyCommand $python @('-B', '-c', 'import platform; print(platform.python_version())')
+    $result = Invoke-AntigravityCommand $python @('-B', '-c', 'import platform; print(platform.python_version())')
     Assert-Smoke ($result.ExitCode -eq 0 -and $result.Output.Trim() -eq $manifest.python.version) 'wrong bundled Python version'
 
-    $window = Invoke-GoagyBootstrap -ProjectRoot $root -AppArguments @('--demo', '--quit-after', '150') -PassThru
+    $window = Invoke-AntigravityBootstrap -ProjectRoot $root -AppArguments @('--demo', '--quit-after', '150') -PassThru
     try {
         Assert-Smoke ($window.WaitForExit(10000) -and $window.ExitCode -eq 0) 'demo did not exit normally'
     } finally {

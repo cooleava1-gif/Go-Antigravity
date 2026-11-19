@@ -7,7 +7,7 @@ const { randomUUID } = require('node:crypto');
 const { readJson, writeJson } = require('../core/storage');
 
 function tempDir(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'goagy-storage-test-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'go-antigravity-storage-test-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   return dir;
 }

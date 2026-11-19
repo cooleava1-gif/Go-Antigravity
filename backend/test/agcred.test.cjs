@@ -76,7 +76,7 @@ test('二进制 OAuth 扫描跨分块累计标记并在全文件中排序', asyn
   const fs = require('node:fs');
   const os = require('node:os');
   const path = require('node:path');
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'goagy-oauth-chunks-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'go-antigravity-oauth-chunks-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const gap = '\0'.repeat(300);
   for (const [name, text] of [

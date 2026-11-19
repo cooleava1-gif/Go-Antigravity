@@ -1,4 +1,4 @@
-// Anything that can reach goagy.log, accounts.json or the UI console passes through here.
+// Anything that can reach go-antigravity.log, accounts.json or the UI console passes through here.
 //
 // Why this exists: child_process failures are reported as "Command failed: <full command
 // line>", and our curl calls carry the OAuth client secret and the account's refresh token as

@@ -95,7 +95,7 @@ class BackendOwnershipTests(unittest.TestCase):
         elif url.endswith("/api/status"):
             callback(200, json.dumps(self.status).encode())
         else:
-            callback(200, b'<script>window.__GOAGY_TOKEN__="0123456789abcdef0123456789abcdef";</script>')
+            callback(200, b'<script>window.__GO_ANTIGRAVITY_TOKEN__="0123456789abcdef0123456789abcdef";</script>')
 
     def discover(self, payload, *, exit_code=0):
         with patch.object(runtime, "QProcess", discovery_process(payload, exit_code)), patch.object(
@@ -162,8 +162,8 @@ class BackendOwnershipTests(unittest.TestCase):
     def test_only_mobile_and_foreign_project_processes_do_not_block_start(self):
         root = self.backend.root
         self.discover({"processes": [
-            {"pid": 3, "executable": str(root / "goagy-node.exe"),
-             "commandLine": f'"{root / "goagy-node.exe"}" "{root / "backend/mobile/server.mjs"}"'},
+            {"pid": 3, "executable": str(root / "go-antigravity-node.exe"),
+             "commandLine": f'"{root / "go-antigravity-node.exe"}" "{root / "backend/mobile/server.mjs"}"'},
             {"pid": 4, "executable": "node.exe",
              "commandLine": f'node.exe "{root.parent / "foreign/backend/server.js"}"'}],
             "listeners": [{"pid": 3, "port": 19823}, {"pid": 4, "port": 32123}]})
@@ -174,8 +174,8 @@ class BackendOwnershipTests(unittest.TestCase):
     def test_backend_and_mobile_same_executable_probe_only_backend_port(self):
         root = self.backend.root
         self.discover({"processes": [
-            {"pid": 3, "executable": str(root / "goagy-node.exe"),
-             "commandLine": f'"{root / "goagy-node.exe"}" "{root / "backend/mobile/tunnel.mjs"}"'},
+            {"pid": 3, "executable": str(root / "go-antigravity-node.exe"),
+             "commandLine": f'"{root / "go-antigravity-node.exe"}" "{root / "backend/mobile/tunnel.mjs"}"'},
             {"pid": 4, "executable": "node.exe",
              "commandLine": f'node.exe "{root / "backend/server.js"}"'}],
             "listeners": [{"pid": 3, "port": 19823}, {"pid": 4, "port": 32123}]})
@@ -229,24 +229,24 @@ class BackendDataDirectoryTests(unittest.TestCase):
 
 class BackendProcessIdentityTests(unittest.TestCase):
     def test_same_executable_mobile_and_other_project_are_excluded(self):
-        root = Path(tempfile.gettempdir()) / "goagy-synthetic-project"
+        root = Path(tempfile.gettempdir()) / "go-antigravity-synthetic-project"
         for executable, script in (("node.exe", root / "backend/mobile/server.mjs"),
                                    ("node.exe", root / "backend/mobile/tunnel.mjs"),
                                    ("node.exe", root.parent / "other/backend/server.js"),
-                                   ("goagy-node.exe", root / "backend/server.js")):
+                                   ("go-antigravity-node.exe", root / "backend/server.js")):
             with self.subTest(executable=executable, script=script):
                 self.assertFalse(runtime.is_project_backend_process(root, {
                     "executable": executable, "commandLine": f'"{executable}" "{script}"'}))
 
     def test_system_node_absolute_backend_is_recognized(self):
-        root = Path(tempfile.gettempdir()) / "goagy project"
+        root = Path(tempfile.gettempdir()) / "go-antigravity project"
         script = root / "backend/server.js"
         self.assertTrue(runtime.is_project_backend_process(root, {
             "executable": r"C:\Program Files\nodejs\node.exe",
             "commandLine": f'"C:\\Program Files\\nodejs\\node.exe" "{script}"'}))
 
     def test_script_argument_not_incidental_text_must_match(self):
-        root = Path(tempfile.gettempdir()) / "goagy-project"
+        root = Path(tempfile.gettempdir()) / "go-antigravity-project"
         expected = str(root / "backend/server.js")
         for command in (f'node.exe other.js "{expected}"', f'node.exe "{expected}.other"',
                         'node.exe backend/server.js', 'node.exe -e "backend/server.js"'):
@@ -297,7 +297,7 @@ class TemporaryOwnershipTests(unittest.TestCase):
             uncertain = make("uncertain", childPid=0)
             extra = make("extra")
             (extra / "real-config.yml").write_text("keep", encoding="utf-8")
-            old_unmarked = base / "goagy-qt-unmarked"
+            old_unmarked = base / "go-antigravity-qt-unmarked"
             old_unmarked.mkdir()
             result = runtime.cleanup_orphaned_temporary(root, base=base, now=now,
                                                        process_is_running=lambda pid: pid == 99)

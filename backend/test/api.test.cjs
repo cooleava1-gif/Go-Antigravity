@@ -109,7 +109,7 @@ test('静态资源不允许目录穿越', async () => {
 
 test('未知路由返回 404 JSON', async () => {
   await withServer(stubApp(), async port => {
-    const response = await request(port, { route: '/api/nope', headers: { Host: `127.0.0.1:${port}`, 'X-Goagy-Token': TOKEN } });
+    const response = await request(port, { route: '/api/nope', headers: { Host: `127.0.0.1:${port}`, 'X-Go-Antigravity-Token': TOKEN } });
     assert.equal(response.status, 404);
     assert.equal(JSON.parse(response.body).ok, false);
   });
@@ -133,7 +133,7 @@ test('令牌不对（上一次运行遗留）同样拒绝', async () => {
   await withServer(app, async port => {
     const response = await request(port, {
       route: '/api/status',
-      headers: { Host: `127.0.0.1:${port}`, 'X-Goagy-Token': 'stale-token-from-yesterday' }
+      headers: { Host: `127.0.0.1:${port}`, 'X-Go-Antigravity-Token': 'stale-token-from-yesterday' }
     });
     assert.equal(response.status, 401);
   });
@@ -144,7 +144,7 @@ test('带上正确令牌即可正常访问', async () => {
   await withServer(app, async port => {
     const response = await request(port, {
       route: '/api/status',
-      headers: { Host: `127.0.0.1:${port}`, 'X-Goagy-Token': TOKEN }
+      headers: { Host: `127.0.0.1:${port}`, 'X-Go-Antigravity-Token': TOKEN }
     });
     assert.equal(response.status, 200);
     assert.equal(JSON.parse(response.body).phase, 'idle');
@@ -155,8 +155,8 @@ test('首页把令牌内联进 HTML，且不写进任何静态文件', async () 
   await withServer(stubApp(), async port => {
     const response = await request(port, { route: '/', headers: { Host: `127.0.0.1:${port}` } });
     assert.equal(response.status, 200);
-    assert.match(response.body, new RegExp(`window\\.__GOAGY_TOKEN__="${TOKEN}"`));
-    assert.doesNotMatch(response.body, /GOAGY_BOOT_TOKEN/, '占位符必须被替换');
+    assert.match(response.body, new RegExp(`window\\.__GO_ANTIGRAVITY_TOKEN__="${TOKEN}"`));
+    assert.doesNotMatch(response.body, /GO_ANTIGRAVITY_BOOT_TOKEN/, '占位符必须被替换');
     assert.match(response.body, /Go-Antigravity/);
     assert.doesNotMatch(response.body, /\/ui\/|workspace-tabs|data-action=/, '握手页不能加载旧桌面');
   });
@@ -171,7 +171,7 @@ test('脱敏导出是普通 GET', async () => {
   await withServer(app, async port => {
     const response = await request(port, {
       route: '/api/accounts/export',
-      headers: { Host: `127.0.0.1:${port}`, 'X-Goagy-Token': TOKEN }
+      headers: { Host: `127.0.0.1:${port}`, 'X-Go-Antigravity-Token': TOKEN }
     });
     assert.equal(response.status, 200);
     assert.equal(JSON.parse(response.body).includeTokens, false);
@@ -185,7 +185,7 @@ test('GET 带 ?tokens=1 不再能导出完整令牌', async () => {
   await withServer(app, async port => {
     const response = await request(port, {
       route: '/api/accounts/export?tokens=1',
-      headers: { Host: `127.0.0.1:${port}`, 'X-Goagy-Token': TOKEN }
+      headers: { Host: `127.0.0.1:${port}`, 'X-Go-Antigravity-Token': TOKEN }
     });
     assert.equal(response.status, 200);
     assert.equal(JSON.parse(response.body).includeTokens, false, '旧参数必须被忽略');
@@ -203,7 +203,7 @@ test('POST 导出完整令牌必须带显式确认，且会留痕', async () => 
     const rejected = await request(port, {
       method: 'POST',
       route: '/api/accounts/export',
-      headers: { Host: `127.0.0.1:${port}`, 'X-Goagy-Token': TOKEN, 'Content-Type': 'application/json' },
+      headers: { Host: `127.0.0.1:${port}`, 'X-Go-Antigravity-Token': TOKEN, 'Content-Type': 'application/json' },
       body
     });
     assert.equal(rejected.status, 400, '没有 confirm 字段时必须拒绝');
@@ -214,7 +214,7 @@ test('POST 导出完整令牌必须带显式确认，且会留痕', async () => 
     const ok = await request(port, {
       method: 'POST',
       route: '/api/accounts/export',
-      headers: { Host: `127.0.0.1:${port}`, 'X-Goagy-Token': TOKEN, 'Content-Type': 'application/json' },
+      headers: { Host: `127.0.0.1:${port}`, 'X-Go-Antigravity-Token': TOKEN, 'Content-Type': 'application/json' },
       body
     });
     assert.equal(ok.status, 200);
@@ -301,7 +301,7 @@ test('OAuth 无效或重放 state 不写账号，合法回调无需 boot token �
   const fs = require('node:fs');
   const os = require('node:os');
   const { createApplication } = require('../desktop/application');
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'goagy-oauth-api-'));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'go-antigravity-oauth-api-'));
   let exchanges = 0;
   let app;
   try {
@@ -357,7 +357,7 @@ test('内核状态接口需要会话令牌，并返回档位词表供 UI 渲染'
     const denied = await request(port, { route: '/api/kernel/status', headers: { Host: `127.0.0.1:${port}` } });
     assert.equal(denied.status, 401);
 
-    const ok = await request(port, { route: '/api/kernel/status', headers: { Host: `127.0.0.1:${port}`, 'X-Goagy-Token': TOKEN } });
+    const ok = await request(port, { route: '/api/kernel/status', headers: { Host: `127.0.0.1:${port}`, 'X-Go-Antigravity-Token': TOKEN } });
     assert.equal(ok.status, 200);
     const body = JSON.parse(ok.body);
     assert.equal(body.kernel.desired.promptTier, '3');
@@ -376,12 +376,12 @@ test('应用内核补丁是 POST，失败时返回 409 且不带 ok:true', async
     applyKernel: async body => { calls.push(body); return { ok: false, logs: [], errors: ['写入失败：EBUSY'] }; }
   });
   await withServer(app, async port => {
-    const get = await request(port, { route: '/api/kernel/apply', headers: { Host: `127.0.0.1:${port}`, 'X-Goagy-Token': TOKEN } });
+    const get = await request(port, { route: '/api/kernel/apply', headers: { Host: `127.0.0.1:${port}`, 'X-Go-Antigravity-Token': TOKEN } });
     assert.equal(get.status, 404, '补丁应用不允许用 GET 触发');
 
     const failed = await request(port, {
       method: 'POST', route: '/api/kernel/apply',
-      headers: { Host: `127.0.0.1:${port}`, 'X-Goagy-Token': TOKEN, 'Content-Type': 'application/json' },
+      headers: { Host: `127.0.0.1:${port}`, 'X-Go-Antigravity-Token': TOKEN, 'Content-Type': 'application/json' },
       body: JSON.stringify({ promptTier: '3', contextMode: '900k' })
     });
     assert.equal(failed.status, 409);
@@ -400,7 +400,7 @@ test('应用内核补丁成功时回传最新内核状态', async () => {
   await withServer(app, async port => {
     const ok = await request(port, {
       method: 'POST', route: '/api/kernel/apply',
-      headers: { Host: `127.0.0.1:${port}`, 'X-Goagy-Token': TOKEN, 'Content-Type': 'application/json' },
+      headers: { Host: `127.0.0.1:${port}`, 'X-Go-Antigravity-Token': TOKEN, 'Content-Type': 'application/json' },
       body: JSON.stringify({ promptTier: '3', contextMode: '900k' })
     });
     assert.equal(ok.status, 200);
@@ -422,7 +422,7 @@ test('public config/status and kernel apply never echo retired custom prompt fie
     applyKernel: async body => { calls.push(['apply', body]); return { ok: true, logs: [], errors: [] }; }
   });
   await withServer(app, async port => {
-    const headers = { Host: `127.0.0.1:${port}`, 'X-Goagy-Token': TOKEN, 'Content-Type': 'application/json' };
+    const headers = { Host: `127.0.0.1:${port}`, 'X-Go-Antigravity-Token': TOKEN, 'Content-Type': 'application/json' };
     const status = await request(port, { route: '/api/status', headers });
     assert.equal(status.status, 200);
     assert.equal(status.body.includes(secret), false);
@@ -452,7 +452,7 @@ test('kernel apply keeps the API body limit without a custom text channel', asyn
     applyKernel: async body => { calls.push(body); return { ok: true, logs: [], errors: [] }; }
   });
   await withServer(app, async port => {
-    const headers = { Host: `127.0.0.1:${port}`, 'X-Goagy-Token': TOKEN, 'Content-Type': 'application/json' };
+    const headers = { Host: `127.0.0.1:${port}`, 'X-Go-Antigravity-Token': TOKEN, 'Content-Type': 'application/json' };
     const ok = await request(port, { method: 'POST', route: '/api/kernel/apply', headers, body: JSON.stringify({ promptTier: '3', contextMode: '900k', promptText: 'x'.repeat(3960) }) });
     assert.equal(ok.status, 200);
     assert.deepStrictEqual(calls[0], { promptTier: '3', contextMode: '900k' }, '大字段不再有通道，也不会被转发');
@@ -477,7 +477,7 @@ test('旧更新接口对任意方法和请求体均返回 410，且不触发 upd
     ]) {
       const response = await request(port, {
         method, route: '/api/update', body,
-        headers: { Host: '127.0.0.1:' + port, 'X-Goagy-Token': TOKEN, 'Content-Type': 'application/json' }
+        headers: { Host: '127.0.0.1:' + port, 'X-Go-Antigravity-Token': TOKEN, 'Content-Type': 'application/json' }
       });
       assert.equal(response.status, 410);
       const result = JSON.parse(response.body);
@@ -496,7 +496,7 @@ test('更新接口在请求体尚未结束时立即拒绝，不等待或解析�
     const response = await new Promise((resolve, reject) => {
       const req = http.request({
         host: '127.0.0.1', port, method: 'POST', path: '/api/update',
-        headers: { Host: '127.0.0.1:' + port, 'X-Goagy-Token': TOKEN, 'Content-Type': 'application/json', 'Content-Length': '10000' }
+        headers: { Host: '127.0.0.1:' + port, 'X-Go-Antigravity-Token': TOKEN, 'Content-Type': 'application/json', 'Content-Length': '10000' }
       }, res => {
         let body = '';
         res.setEncoding('utf8');
@@ -518,7 +518,7 @@ test('已禁用的更新接口仍保留本地会话与跨站校验', async () =>
     assert.equal(denied.status, 401);
     const crossSite = await request(port, {
       method: 'POST', route: '/api/update',
-      headers: { Host: '127.0.0.1:' + port, 'X-Goagy-Token': TOKEN, Origin: 'https://untrusted.invalid' }
+      headers: { Host: '127.0.0.1:' + port, 'X-Go-Antigravity-Token': TOKEN, Origin: 'https://untrusted.invalid' }
     });
     assert.equal(crossSite.status, 403);
   });
@@ -532,7 +532,7 @@ test('代理自检结果随 status 一起下发，端口与开关都在', async 
     const denied = await request(port, { route: '/api/proxy/status', headers: { Host: `127.0.0.1:${port}` } });
     assert.equal(denied.status, 401);
 
-    const ok = await request(port, { route: '/api/proxy/status', headers: { Host: `127.0.0.1:${port}`, 'X-Goagy-Token': TOKEN } });
+    const ok = await request(port, { route: '/api/proxy/status', headers: { Host: `127.0.0.1:${port}`, 'X-Go-Antigravity-Token': TOKEN } });
     assert.equal(ok.status, 200);
     const body = JSON.parse(ok.body);
     assert.equal(body.proxy.port, 7890);
@@ -549,10 +549,10 @@ test('手动代理自检是 POST，地域被拒时也要把原因带回前端', 
     proxyCheck: async () => ({ ok: false, code: 'geo-blocked', status: 400, message: 'Google 拒绝服务', advice: '更换代理节点' })
   });
   await withServer(app, async port => {
-    const get = await request(port, { route: '/api/proxy/check', headers: { Host: `127.0.0.1:${port}`, 'X-Goagy-Token': TOKEN } });
+    const get = await request(port, { route: '/api/proxy/check', headers: { Host: `127.0.0.1:${port}`, 'X-Go-Antigravity-Token': TOKEN } });
     assert.equal(get.status, 404, '自检不允许用 GET 触发');
 
-    const failed = await request(port, { method: 'POST', route: '/api/proxy/check', headers: { Host: `127.0.0.1:${port}`, 'X-Goagy-Token': TOKEN } });
+    const failed = await request(port, { method: 'POST', route: '/api/proxy/check', headers: { Host: `127.0.0.1:${port}`, 'X-Go-Antigravity-Token': TOKEN } });
     assert.equal(failed.status, 200);
     const body = JSON.parse(failed.body);
     assert.equal(body.probe.code, 'geo-blocked');
@@ -566,7 +566,7 @@ test('手动代理自检通过时回传最新状态', async () => {
     proxyCheck: async () => ({ ok: true, code: 'ok', status: 400, ms: 210 })
   });
   await withServer(app, async port => {
-    const ok = await request(port, { method: 'POST', route: '/api/proxy/check', headers: { Host: `127.0.0.1:${port}`, 'X-Goagy-Token': TOKEN } });
+    const ok = await request(port, { method: 'POST', route: '/api/proxy/check', headers: { Host: `127.0.0.1:${port}`, 'X-Go-Antigravity-Token': TOKEN } });
     assert.equal(ok.status, 200);
     const body = JSON.parse(ok.body);
     assert.equal(body.probe.ok, true);

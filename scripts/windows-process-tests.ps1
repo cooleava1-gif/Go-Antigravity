@@ -48,9 +48,9 @@ function Get-Process {
     $fake | Add-Member ScriptMethod Dispose {}
     $fake
 }
-$previous = $env:GOAGY_KERNEL_TARGET_PATHS
+$previous = $env:GO_ANTIGRAVITY_KERNEL_TARGET_PATHS
 try {
-    $env:GOAGY_KERNEL_TARGET_PATHS = ConvertTo-Json -InputObject @($target) -Compress
+    $env:GO_ANTIGRAVITY_KERNEL_TARGET_PATHS = ConvertTo-Json -InputObject @($target) -Compress
     $scriptFile = Join-Path $root 'backend/features/kernel-processes.ps1'
     if ((& $scriptFile) -ne 1 -or $stopped.Count) { throw 'Read-only query did not return just the target' }
     if ((& $scriptFile -StopTargets) -ne 1 -or ($stopped -join ',') -ne '11') { throw 'Incorrect kernel process was selected' }
@@ -72,7 +72,7 @@ try {
                         @{ ProcessId = 14; ExecutablePath = $imagePath; Owner = $null }
                     )
                     $stopped.Clear(); $openedPids.Clear(); $heldPids.Clear()
-                    $env:GOAGY_KERNEL_TARGET_PATHS = ConvertTo-Json -InputObject @('Z:\unrelated\language_server.exe', $targetPath) -Compress
+                    $env:GO_ANTIGRAVITY_KERNEL_TARGET_PATHS = ConvertTo-Json -InputObject @('Z:\unrelated\language_server.exe', $targetPath) -Compress
                     if ((& $scriptFile) -ne 1 -or $openedPids.Count -or $stopped.Count) {
                         throw "Read-only $($family.Name) alias query crossed a path or owner boundary"
                     }
@@ -87,7 +87,7 @@ try {
     }
 
     # A matching CIM row must still pass the identity checks after its handle is held.
-    $env:GOAGY_KERNEL_TARGET_PATHS = ConvertTo-Json -InputObject @($target) -Compress
+    $env:GO_ANTIGRAVITY_KERNEL_TARGET_PATHS = ConvertTo-Json -InputObject @($target) -Compress
     foreach ($modulePath in @('D:\Other\Antigravity\language_server.exe', '\\server\other\language_server.exe')) {
         $fixtureRows = @(@{ ProcessId = 11; ExecutablePath = $target; Owner = $sid })
         $stopped.Clear(); $openedPids.Clear(); $heldPids.Clear()
@@ -101,5 +101,5 @@ try {
     if ((& $scriptFile -StopTargets) -ne 1 -or $stopped.Count -or ($heldPids -join ',') -ne '11') {
         throw 'A changed owner passed the held-handle owner check'
     }
-} finally { $env:GOAGY_KERNEL_TARGET_PATHS = $previous }
+} finally { $env:GO_ANTIGRAVITY_KERNEL_TARGET_PATHS = $previous }
 Write-Host "Windows process isolation passed (mobile discovery, $aliasCases path alias combinations, held-handle identity and owner checks)"

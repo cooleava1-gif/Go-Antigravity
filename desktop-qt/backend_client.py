@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 from PyQt6.QtCore import QObject, QTimer, QUrl, pyqtSignal
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkProxy, QNetworkReply, QNetworkRequest
 
-_BOOT_TOKEN = re.compile(r'window\.__GOAGY_TOKEN__\s*=\s*("(?:[^"\\]|\\.)*")\s*;')
+_BOOT_TOKEN = re.compile(r'window\.__GO_ANTIGRAVITY_TOKEN__\s*=\s*("(?:[^"\\]|\\.)*")\s*;')
 
 
 def validate_base_url(value: str) -> str:
@@ -164,7 +164,7 @@ class BackendClient(QObject):
                callback: Callable[[int, bytes, str], None], authenticated: bool = True) -> None:
         request = local_request(self.base_url + route)
         if authenticated:
-            request.setRawHeader(b"X-Goagy-Token", self._token.encode("ascii"))
+            request.setRawHeader(b"X-Go-Antigravity-Token", self._token.encode("ascii"))
         if payload is not None:
             request.setRawHeader(b"Content-Type", b"application/json; charset=utf-8")
         reply = (self._network.get(request) if method == "GET"

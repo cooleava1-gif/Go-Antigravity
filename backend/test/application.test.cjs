@@ -19,7 +19,7 @@ const { CONTEXT_MODES, CONTEXT_SIGNATURES } = require('../features/kernel-patch'
 const ROOT_DIR = path.join(__dirname, '..', '..');
 
 async function withRealApp(task, options = {}) {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'goagy-app-'));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'go-antigravity-app-'));
   const app = await createApplication({ rootDir: ROOT_DIR, dataDir, native: false, testMode: true, ...options });
   try {
     await task(app);
@@ -32,7 +32,7 @@ async function withRealApp(task, options = {}) {
 // Load only application.js with isolated process and clock dependencies. Its other modules
 // still run in testMode, and every credential/profile call below uses synthetic data.
 async function withAccountApp(task, credentialOverrides = {}, appOptions = {}) {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'goagy-account-p1-'));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'go-antigravity-account-p1-'));
   const calls = { processes: [], waits: [], writes: [], reads: 0, launches: 0, order: [] };
   const clock = { now: 1800000000000 };
   const fresh = { accessToken: 'synthetic-new-access', refreshToken: 'synthetic-new-refresh', expiryTs: clock.now + 3600000, clientType: 'public' };
@@ -95,7 +95,7 @@ function request(port, token, { method = 'GET', route = '/', body = null } = {})
   return new Promise((resolve, reject) => {
     const req = http.request({
       host: '127.0.0.1', port, method, path: route,
-      headers: { Host: `127.0.0.1:${port}`, 'X-Goagy-Token': token, 'Content-Type': 'application/json' }
+      headers: { Host: `127.0.0.1:${port}`, 'X-Go-Antigravity-Token': token, 'Content-Type': 'application/json' }
     }, res => {
       let text = '';
       res.setEncoding('utf8');

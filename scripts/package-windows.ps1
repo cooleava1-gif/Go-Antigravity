@@ -67,7 +67,7 @@ function Get-NodeSourcePath {
     $candidate = if ($Requested) { Get-FullPath $Requested } else { Resolve-CommandPath 'node.exe' }
     Assert-File $candidate 'Node.js executable'
     $version = Get-VersionFromExecutable $candidate 'Node.js'
-    if (-not (Test-GoagyNodeVersion $version)) {
+    if (-not (Test-AntigravityNodeVersion $version)) {
         Fail "Node.js 22.13+ is required; found $version"
     }
     return [pscustomobject]@{ Path = $candidate; Version = $version }

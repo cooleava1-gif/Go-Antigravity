@@ -20,7 +20,7 @@ if (!fs.existsSync(target)) {
 }
 
 const files = fs.readdirSync(target)
-  .filter(name => /^goagy\.log(\.previous)?$/.test(name) || /^accounts(\.bak-[^.]+)?\.json$/.test(name))
+  .filter(name => /^go-antigravity\.log(\.previous)?$/.test(name) || /^accounts(\.bak-[^.]+)?\.json$/.test(name))
   .map(name => path.join(target, name));
 
 let hits = 0;

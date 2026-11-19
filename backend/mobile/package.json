@@ -1,5 +1,5 @@
 {
-  "name": "goagy-mobile-runtime",
+  "name": "go-antigravity-mobile-runtime",
   "private": true,
   "type": "module",
   "engines": { "node": "^22.13.0 || >=23.4.0" }

@@ -61,7 +61,7 @@ function harness(options = {}) {
     __dirname: path.resolve(__dirname, '../features'),
     setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
     setInterval: clock.setInterval, clearInterval: clock.clearInterval,
-    process: { platform: 'win32', execPath: 'fallback-node.exe', env: { KEEP: 'yes', GOAGY_POCKET_PIN: 'old-parent-pin', ...options.env },
+    process: { platform: 'win32', execPath: 'fallback-node.exe', env: { KEEP: 'yes', GO_ANTIGRAVITY_MOBILE_PIN: 'old-parent-pin', ...options.env },
       kill() { if (h.originAlive ?? h.launched) return true; throw Object.assign(Error('gone'), { code: 'ESRCH' }); } },
     require(name) {
       if (name === 'node:fs') return { existsSync: target => {
@@ -92,9 +92,9 @@ function harness(options = {}) {
     h.launched = true;
     const spawned = child(4000 + h.children.length);
     spawned.initial = (overrides = {}) => spawned.line({ ready: true, local: LOCAL_URL,
-      lan: 'http://192.0.2.10:3082/', pin: config.env.GOAGY_POCKET_PIN, pid: 5000 + h.children.length, ...overrides });
-    spawned.final = (overrides = {}) => spawned.line({ ...ready, mode: config.env.GOAGY_POCKET_MODE,
-      publicUrl: config.env.GOAGY_POCKET_MODE === 'fixed' ? config.env.GOAGY_POCKET_FIXED_URL : (h.publicUrl || PUBLIC_URL), ...overrides });
+      lan: 'http://192.0.2.10:3082/', pin: config.env.GO_ANTIGRAVITY_MOBILE_PIN, pid: 5000 + h.children.length, ...overrides });
+    spawned.final = (overrides = {}) => spawned.line({ ...ready, mode: config.env.GO_ANTIGRAVITY_MOBILE_MODE,
+      publicUrl: config.env.GO_ANTIGRAVITY_MOBILE_MODE === 'fixed' ? config.env.GO_ANTIGRAVITY_MOBILE_FIXED_URL : (h.publicUrl || PUBLIC_URL), ...overrides });
     spawned.ready = () => { spawned.initial(); spawned.final(); };
     h.children.push(spawned);
     return spawned;
@@ -167,10 +167,10 @@ test('spawns current Node and portable tunnel with isolated environment and snap
   const call = h.primaryCalls()[0];
   assert.equal(call.file, 'fallback-node.exe');
   assert.equal(JSON.stringify(call.args), JSON.stringify(['tunnel.mjs']));
-  assert.equal(call.config.env.GOAGY_POCKET_MODE, 'quick');
-  assert.equal(call.config.env.GOAGY_POCKET_FIXED_URL, '');
+  assert.equal(call.config.env.GO_ANTIGRAVITY_MOBILE_MODE, 'quick');
+  assert.equal(call.config.env.GO_ANTIGRAVITY_MOBILE_FIXED_URL, '');
   assert.equal(result.mode, 'quick'); assert.equal(result.publicUrl, PUBLIC_URL);
-  assert.equal(call.config.env.GOAGY_POCKET_PIN, '01234567'); assert.equal(call.config.env.KEEP, 'yes');
+  assert.equal(call.config.env.GO_ANTIGRAVITY_MOBILE_PIN, '01234567'); assert.equal(call.config.env.KEEP, 'yes');
   assert.equal(call.config.cwd, path.resolve(__dirname, '../mobile'));
   assert.ok(h.checkedFiles.every(file => ['tunnel.mjs', 'server.mjs'].includes(path.basename(file))));
   assert.equal(call.config.windowsHide, true);
@@ -182,7 +182,7 @@ test('spawns current Node and portable tunnel with isolated environment and snap
 test('uses process.execPath without a bundled runtime and generates eight digits', async () => {
   const h = harness(); const result = await h.run();
   assert.match(result.pin, /^\d{8}$/); assert.equal(h.primaryCalls()[0].file, 'fallback-node.exe');
-  assert.equal(h.primaryCalls()[0].config.env.GOAGY_POCKET_PIN, result.pin); await h.manager.close();
+  assert.equal(h.primaryCalls()[0].config.env.GO_ANTIGRAVITY_MOBILE_PIN, result.pin); await h.manager.close();
 });
 
 test('concurrent and repeated starts share one child and keep its original PIN', async () => {
@@ -448,17 +448,17 @@ test('automatic start catches failures; close cancels startup and permanently pr
 });
 
 test('portable project and Node overrides pass through only the expected child environment', async () => {
-  const h = harness({ env: { GOAGY_POCKET_PROJECT: 'D:/portable/mobile', GOAGY_POCKET_NODE: 'D:/runtime/node.exe',
-    GOAGY_POCKET_CF_CONFIG: 'D:/private/config.yml', GOAGY_POCKET_MODE: 'fixed' } });
+  const h = harness({ env: { GO_ANTIGRAVITY_MOBILE_PROJECT: 'D:/portable/mobile', GO_ANTIGRAVITY_MOBILE_NODE: 'D:/runtime/node.exe',
+    GO_ANTIGRAVITY_MOBILE_CF_CONFIG: 'D:/private/config.yml', GO_ANTIGRAVITY_MOBILE_MODE: 'fixed' } });
   const result = await h.run(); const call = h.primaryCalls()[0];
   assert.equal(call.file, 'D:/runtime/node.exe'); assert.equal(call.config.cwd, 'D:/portable/mobile');
-  assert.equal(call.config.env.GOAGY_POCKET_MODE, 'quick');
-  assert.equal(call.config.env.GOAGY_POCKET_CF_CONFIG, undefined);
+  assert.equal(call.config.env.GO_ANTIGRAVITY_MOBILE_MODE, 'quick');
+  assert.equal(call.config.env.GO_ANTIGRAVITY_MOBILE_CF_CONFIG, undefined);
   assert.equal(result.mode, 'quick');
   assert.doesNotMatch(JSON.stringify(h.published) + JSON.stringify(h.logs), /private|config\.yml/);
   assert.ok(h.checkedFiles.every(file => ['tunnel.mjs', 'server.mjs'].includes(path.basename(file))));
   await h.manager.close();
-  const explicit = harness({ projectDir: 'D:/explicit/mobile', env: { GOAGY_POCKET_PROJECT: 'D:/ignored/mobile' } });
+  const explicit = harness({ projectDir: 'D:/explicit/mobile', env: { GO_ANTIGRAVITY_MOBILE_PROJECT: 'D:/ignored/mobile' } });
   await explicit.run(); assert.equal(explicit.primaryCalls()[0].config.cwd, 'D:/explicit/mobile');
   await explicit.manager.close();
 });
@@ -486,7 +486,7 @@ test('explicit fixed mode normalizes an HTTPS origin and only publishes the heal
   assert.equal(stopped.fixedConfigured, true); assert.equal(stopped.publicUrl, null);
   const pending = h.manager.start(); await flush();
   const call = h.primaryCalls()[0];
-  assert.equal(call.config.env.GOAGY_POCKET_MODE, 'fixed'); assert.equal(call.config.env.GOAGY_POCKET_FIXED_URL, FIXED_URL);
+  assert.equal(call.config.env.GO_ANTIGRAVITY_MOBILE_MODE, 'fixed'); assert.equal(call.config.env.GO_ANTIGRAVITY_MOBILE_FIXED_URL, FIXED_URL);
   assert.equal(h.manager.snapshot().publicUrl, null);
   h.children[0].ready(); const running = await pending;
   assert.equal(running.state, 'running'); assert.equal(running.publicUrl, FIXED_URL);
@@ -495,7 +495,7 @@ test('explicit fixed mode normalizes an HTTPS origin and only publishes the heal
 });
 
 test('fixed URL defaults only from explicit environment or settings with settings taking precedence', async () => {
-  const env = { GOAGY_POCKET_FIXED_URL: FIXED_URL };
+  const env = { GO_ANTIGRAVITY_MOBILE_FIXED_URL: FIXED_URL };
   const fallback = harness({ env, config: { mobileMode: 'fixed' } });
   assert.equal((await fallback.run()).publicUrl, FIXED_URL); await fallback.manager.close();
   const explicit = harness({ env, config: { mobileMode: 'fixed', mobileFixedUrl: 'https://other.example.test:8443' } });
@@ -580,7 +580,7 @@ test('per-run configuration is captured before asynchronous preflight and cannot
   assert.equal(h.manager.snapshot().mode, 'quick'); assert.equal(h.manager.snapshot().fixedUrl, '');
   h.children[0].ready(); const result = await pending;
   assert.equal(result.mode, 'quick'); assert.equal(result.publicUrl, PUBLIC_URL);
-  assert.equal(h.primaryCalls()[0].config.env.GOAGY_POCKET_MODE, 'quick');
+  assert.equal(h.primaryCalls()[0].config.env.GO_ANTIGRAVITY_MOBILE_MODE, 'quick');
   await h.manager.stop(); assert.equal(h.manager.snapshot().mode, 'fixed');
   assert.equal((await h.run()).publicUrl, FIXED_URL); await h.manager.close();
 });
@@ -708,19 +708,19 @@ test('terminal recovery budget failure clears URL and PIN with a canned actionab
 test('stored named token wins external config and remains absent from argv snapshots events and quick environment', async () => {
   const secret = 'synthetic-cloudflare-token-12345';
   const secrets = { status: () => ({ configured: true, available: true }), token: () => secret };
-  const env = { TUNNEL_TOKEN: 'inherited-token', GOAGY_POCKET_CF_CONFIG: 'D:/private/config.yml', CF_TUNNEL_TOKEN: 'other-token' };
+  const env = { TUNNEL_TOKEN: 'inherited-token', GO_ANTIGRAVITY_MOBILE_CF_CONFIG: 'D:/private/config.yml', CF_TUNNEL_TOKEN: 'other-token' };
   const h = harness({ secrets, env, config: { mobileMode: 'fixed', mobileFixedUrl: FIXED_URL } });
   assert.equal(h.manager.snapshot().fixedAuth, 'token'); const running = await h.run();
   const call = h.primaryCalls()[0]; assert.equal(call.config.env.TUNNEL_TOKEN, secret);
-  assert.equal(call.config.env.GOAGY_POCKET_CF_CONFIG, undefined); assert.equal(call.config.env.CF_TUNNEL_TOKEN, undefined);
+  assert.equal(call.config.env.GO_ANTIGRAVITY_MOBILE_CF_CONFIG, undefined); assert.equal(call.config.env.CF_TUNNEL_TOKEN, undefined);
   assert.doesNotMatch(JSON.stringify(call.args) + JSON.stringify(running) + JSON.stringify(h.published) + JSON.stringify(h.logs), /synthetic-cloudflare-token|inherited-token|other-token|private/);
   await h.manager.close();
   const quick = harness({ secrets, env }); await quick.run(); const childEnv = quick.primaryCalls()[0].config.env;
-  for (const key of ['TUNNEL_TOKEN', 'CF_TUNNEL_TOKEN', 'GOAGY_POCKET_CF_CONFIG']) assert.equal(childEnv[key], undefined);
+  for (const key of ['TUNNEL_TOKEN', 'CF_TUNNEL_TOKEN', 'GO_ANTIGRAVITY_MOBILE_CF_CONFIG']) assert.equal(childEnv[key], undefined);
   await quick.manager.close();
 });
 test('inaccessible stored credential reports configured but blocks named start without leaking or config fallback', async () => {
-  const h = harness({ config: { mobileMode: 'fixed', mobileFixedUrl: FIXED_URL }, env: { GOAGY_POCKET_CF_CONFIG: 'D:/private/config.yml' },
+  const h = harness({ config: { mobileMode: 'fixed', mobileFixedUrl: FIXED_URL }, env: { GO_ANTIGRAVITY_MOBILE_CF_CONFIG: 'D:/private/config.yml' },
     secrets: { status: () => ({ configured: true, available: false }), token() { throw Error('synthetic-secret-private'); } } });
   assert.equal(h.manager.snapshot().tunnelTokenConfigured, true); assert.equal(h.manager.snapshot().fixedAuth, null);
   const result = await h.manager.start(); assert.equal(result.state, 'error'); assert.equal(h.calls.length, 0);
@@ -732,7 +732,7 @@ test('unresolved credential transaction blocks quick fixed manual and automatic 
   for (const mode of ['quick', 'fixed']) {
     let checks = 0;
     const h = harness({ config: { mobileMode: mode, mobileFixedUrl: FIXED_URL, mobileAutoStart: true },
-      env: { GOAGY_POCKET_CF_CONFIG: 'D:/private/config.yml' },
+      env: { GO_ANTIGRAVITY_MOBILE_CF_CONFIG: 'D:/private/config.yml' },
       secrets: { status: () => ({ configured: true, available: false }), assertReady() { checks++; throw Error('synthetic-secret-private'); } } });
     await flush(); h.requests.length = 0;
     for (const run of [() => h.manager.start(), () => h.manager.onAgStart()]) {
@@ -748,7 +748,7 @@ test('the first terminal protocol result wins within a single output chunk', asy
   const h = harness(); const pending = h.manager.start(); await flush();
   const spawned = h.children[0];
   spawned.stdout.emit('data', Buffer.from(JSON.stringify({ error: 'CLOUDFLARED_NOT_FOUND' }) + '\n' +
-    JSON.stringify({ ready: true, local: LOCAL_URL, pin: h.primaryCalls()[0].config.env.GOAGY_POCKET_PIN, pid: 5000 }) + '\n' +
+    JSON.stringify({ ready: true, local: LOCAL_URL, pin: h.primaryCalls()[0].config.env.GO_ANTIGRAVITY_MOBILE_PIN, pid: 5000 }) + '\n' +
     JSON.stringify(ready) + '\n'));
   const result = await pending; assert.equal(result.state, 'error'); assert.match(result.lastError, /cloudflared/);
   assert.equal(result.publicUrl, null); assert.equal(h.published.some(value => value.mobile.state === 'running'), false);

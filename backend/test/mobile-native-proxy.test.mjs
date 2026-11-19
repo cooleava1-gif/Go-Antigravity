@@ -128,6 +128,6 @@ test('native same-origin tunneled phone requests and local clients remain compat
  for (const forwarded of f.received) {
   assert.equal(forwarded.headers.origin, f.nativeBase);
   assert.equal(forwarded.headers['x-codeium-csrf-token'], 'synthetic-native-token');
-  assert.ok(!forwarded.headers.cookie?.includes('goagy_pocket_session='));
+  assert.ok(!forwarded.headers.cookie?.includes('go_antigravity_mobile_session='));
  }
 });

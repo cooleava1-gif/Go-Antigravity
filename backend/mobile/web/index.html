@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#101a17">
   <meta name="color-scheme" content="light dark">
   <meta name="description" content="在手机上查看和继续 Antigravity 桌面会话。">
-  <title>Goagy Pocket</title>
+  <title>Antigravity Pocket</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="./styles.css">
   <script type="module" src="./app.js"></script>
@@ -33,7 +33,7 @@
     <div id="drawerBackdrop" class="drawer-backdrop" hidden></div>
     <aside id="sessionDrawer" class="sidebar" aria-label="会话导航" tabindex="-1">
       <div class="sidebar-top">
-        <a class="brand" href="./" aria-label="Goagy Pocket 首页"><span class="brand-mark"><svg class="icon"><use href="#i-orbit"/></svg></span><span><strong>Antigravity</strong><span class="brand-subtitle">POCKET <span class="beta">BETA</span></span></span></a>
+        <a class="brand" href="./" aria-label="Antigravity Pocket 首页"><span class="brand-mark"><svg class="icon"><use href="#i-orbit"/></svg></span><span><strong>Antigravity</strong><span class="brand-subtitle">POCKET <span class="beta">BETA</span></span></span></a>
         <button id="closeDrawer" class="icon-button mobile-only" type="button" aria-label="关闭会话列表"><svg class="icon"><use href="#i-close"/></svg></button>
       </div>
       <button id="newSession" class="new-session" type="button" disabled><svg class="icon"><use href="#i-plus"/></svg><span>新建会话</span></button>
@@ -49,7 +49,7 @@
     <main id="mainContent" class="main-panel">
       <header class="conversation-header">
         <button id="openDrawer" class="icon-button mobile-only" type="button" aria-label="打开会话列表" aria-controls="sessionDrawer" aria-expanded="false"><svg class="icon"><use href="#i-menu"/></svg></button>
-        <div class="conversation-heading"><p id="conversationEyebrow">你的随身工作区</p><h1 id="conversationTitle">Goagy Pocket</h1></div>
+        <div class="conversation-heading"><p id="conversationEyebrow">你的随身工作区</p><h1 id="conversationTitle">Antigravity Pocket</h1></div>
         <div class="header-actions"><span id="connectionStatus" class="connection-status" role="status"><span class="status-dot"></span><span id="connectionLabel">连接中</span></span><button id="refreshConversation" class="icon-button" type="button" aria-label="刷新当前会话"><svg class="icon"><use href="#i-refresh"/></svg></button></div>
       </header>
       <section id="notice" class="notice" aria-label="连接和操作提示" hidden><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg><div><p id="noticeText" role="alert"></p><div class="notice-actions"><button id="reconnect" type="button">重新连接</button><a id="authLink" href="/pocket-login" hidden>返回 Pocket 首页验证身份</a></div></div></section>
@@ -66,7 +66,7 @@
         </form>
         <div class="composer-meta"><span id="modelContext">模型选择在下次发送时生效</span><span id="draftStatus">草稿已保留</span></div>
         <nav class="mobile-quick-actions mobile-only" aria-label="快捷操作"><button id="quickSessions" type="button" aria-controls="sessionDrawer" aria-expanded="false"><svg class="icon" aria-hidden="true"><use href="#i-chat"/></svg><span>会话</span></button><span id="transportLabel">正在连接</span><button id="quickNew" type="button"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg><span>新建</span></button></nav>
-        <p id="composerHint" class="composer-hint"><span>Enter 换行 · Ctrl / ⌘ + Enter 发送</span><span>Goagy Pocket</span></p>
+        <p id="composerHint" class="composer-hint"><span>Enter 换行 · Ctrl / ⌘ + Enter 发送</span><span>Antigravity Pocket</span></p>
       </div>
     </main>
   </div>

@@ -12,7 +12,7 @@ function ConvertTo-ComparisonPath {
     return $Value
 }
 $paths = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-foreach ($targetPath in (ConvertFrom-Json -InputObject $env:GOAGY_KERNEL_TARGET_PATHS)) {
+foreach ($targetPath in (ConvertFrom-Json -InputObject $env:GO_ANTIGRAVITY_KERNEL_TARGET_PATHS)) {
     $comparisonPath = ConvertTo-ComparisonPath $targetPath
     if ($comparisonPath) { $null = $paths.Add($comparisonPath) }
 }

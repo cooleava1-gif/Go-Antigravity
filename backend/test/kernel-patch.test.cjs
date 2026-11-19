@@ -41,7 +41,7 @@ function loadPatcher(fsOverrides = {}, execFileStub) {
 
 function setupPatchCase(t, buffer = buildKernel()) {
   const target = place(tempTarget(), buffer);
-  const home = tempDir('goagy-kernel-home-');
+  const home = tempDir('go-antigravity-kernel-home-');
   t.after(() => {
     fs.rmSync(target.dir, { recursive: true, force: true });
     fs.rmSync(home, { recursive: true, force: true });
@@ -156,7 +156,7 @@ function buildKernel() {
 }
 
 function tempTarget(name = 'language_server.exe') {
-  const dir = tempDir('goagy-kernel-');
+  const dir = tempDir('go-antigravity-kernel-');
   return { dir, path: path.join(dir, 'bin', name), backupPath: path.join(dir, 'bin', `${name}.bak`) };
 }
 
@@ -171,7 +171,7 @@ function read(target) {
 }
 
 function withHome(run) {
-  const home = tempDir('goagy-home-');
+  const home = tempDir('go-antigravity-home-');
   try { return run(home); } finally { fs.rmSync(home, { recursive: true, force: true }); }
 }
 
@@ -191,7 +191,7 @@ test('locked writer stops only the executable it failed to replace', async t => 
   }, (file, args, options, callback) => {
     if (/compact\.exe$/i.test(file)) return callback(null);
     calls.push({ file, script: path.basename(args[args.indexOf('-File') + 1]), stop: args.includes('-StopTargets'),
-      paths: JSON.parse(options.env.GOAGY_KERNEL_TARGET_PATHS) });
+      paths: JSON.parse(options.env.GO_ANTIGRAVITY_KERNEL_TARGET_PATHS) });
     locked = false;
     callback(null, '1\r\n');
   });
@@ -218,9 +218,9 @@ test('tier and mode normalisation accepts the documented spellings and rejects j
   assert.strictEqual(CONTEXT_MODES.stock.tokens, 0);
 });
 
-test('resolveTargets honours GOAGY_AG_EXE for the desktop kernel', () => {
+test('resolveTargets honours GO_ANTIGRAVITY_AG_EXE for the desktop kernel', () => {
   const explicit = 'D:/portable/Antigravity/Antigravity.exe';
-  const targets = resolveTargets({ GOAGY_AG_EXE: explicit });
+  const targets = resolveTargets({ GO_ANTIGRAVITY_AG_EXE: explicit });
   assert.strictEqual(targets[0].path, 'D:/portable/Antigravity/resources/bin/language_server.exe'.replace(/\//g, path.sep));
   assert.strictEqual(targets[0].backupPath, targets[0].path + '.bak');
   assert.strictEqual(targets[1].id, 'ide');
@@ -423,7 +423,7 @@ test('balanced v2 rewrites only core slots and preserves every auxiliary templat
     assert.ok(buffer.subarray(slot.dataOffset, slot.dataOffset + slot.dataLength).equals(original.subarray(slot.dataOffset, slot.dataOffset + slot.dataLength)), name + ' preserved');
   }
   const guidelines = buffer.toString('utf8', slots.get('system_prompts/guidelines.tmpl').dataOffset, slots.get('system_prompts/guidelines.tmpl').dataOffset + slots.get('system_prompts/guidelines.tmpl').dataLength);
-  assert.ok(guidelines.startsWith('Goagy balanced v2'));
+  assert.ok(guidelines.startsWith('Go-Antigravity balanced v2'));
   const style = buffer.toString('utf8', slots.get('system_prompts/communication_style.tmpl').dataOffset, slots.get('system_prompts/communication_style.tmpl').dataOffset + slots.get('system_prompts/communication_style.tmpl').dataLength);
   assert.ok(style.includes('Do not fabricate symbols'));
   assert.ok(buffer.toString('utf8', slots.get('system_prompts/identity.tmpl').dataOffset, slots.get('system_prompts/identity.tmpl').dataOffset + slots.get('system_prompts/identity.tmpl').dataLength).includes(IDENTITY_MARKER));
@@ -588,7 +588,7 @@ test('a backup from a different build is refused instead of corrupting the kerne
 });
 
 test('inspectKernel reports a missing kernel without throwing', () => {
-  const dir = tempDir('goagy-inspect-');
+  const dir = tempDir('go-antigravity-inspect-');
   try {
     const result = inspectKernel({ targets: [{ id: 'desktop', label: 'x', path: path.join(dir, 'nope.exe'), backupPath: path.join(dir, 'nope.exe.bak') }] });
     assert.strictEqual(result.targets[0].exists, false);
@@ -599,7 +599,7 @@ test('inspectKernel reports a missing kernel without throwing', () => {
 test('applyKernelPatch backs up once, patches, then reports a no-op second run', async () => {
   const target = place(tempTarget(), buildKernel());
   try {
-    const home = tempDir('goagy-home-');
+    const home = tempDir('go-antigravity-home-');
     // Leave config directories for products the user never ran untouched.
     fs.mkdirSync(path.join(home, '.gemini', 'config'), { recursive: true });
     try {
@@ -849,7 +849,7 @@ function filesUnder(root) {
 
 function assertNoTransactionTemps(fixture) {
   for (const root of [fixture.home, fixture.target.dir]) {
-    assert.deepStrictEqual(filesUnder(root).filter(file => /\.goagy-.*\.tmp$|\.old_run$/.test(file)), []);
+    assert.deepStrictEqual(filesUnder(root).filter(file => /\.go-antigravity-.*\.tmp$|\.old_run$/.test(file)), []);
   }
 }
 
@@ -865,7 +865,7 @@ test('config parse, shape, stage and silent-stage failures fail closed before an
       let attempts = 0;
       const patcher = loadPatcher({
         writeFileSync(file, ...args) {
-          if (String(file).startsWith(fixture.config + '.goagy-')) {
+          if (String(file).startsWith(fixture.config + '.go-antigravity-')) {
             attempts++;
             if (failure === 'write-error') throw new Error('injected config stage failure');
             if (failure === 'silent-write') return;
@@ -906,7 +906,7 @@ test('second config stage/rename faults restore both exact JSON texts and the pr
         let stageWrites = 0, faults = 0;
         const patcher = loadPatcher({
           writeFileSync(file, bytes, ...args) {
-            if (failure === 'stage-partial' && String(file).startsWith(fixture.cliConfig + '.goagy-') && ++stageWrites === 2) {
+            if (failure === 'stage-partial' && String(file).startsWith(fixture.cliConfig + '.go-antigravity-') && ++stageWrites === 2) {
               fs.writeFileSync(file, Buffer.from(bytes).subarray(0, 7), ...args);
               faults++;
               throw new Error('injected partial second config stage');
@@ -944,7 +944,7 @@ test('stock restores original custom values and exact BOM/format while preservin
   assert.strictEqual(first.ok, true, JSON.stringify(first));
   assert.strictEqual(detectConfiguredContextCap(fixture.home), 983040);
   const firstFiles = filesUnder(fixture.home);
-  const sidecar = fixture.config + '.goagy-context.json';
+  const sidecar = fixture.config + '.go-antigravity-context.json';
   const saved = fs.readFileSync(sidecar);
   for (let index = 0; index < 3; index++) {
     const result = await applyKernelPatch({ contextMode: '900k' }, { targets: [fixture.target], homeDir: fixture.home });
@@ -1005,7 +1005,7 @@ test('unknown recovery records and externally changed owned values fail closed',
     await t.test(kind, async t => {
       const fixture = setupPatchCase(t);
       assert.strictEqual((await applyKernelPatch({ contextMode: '900k' }, { targets: [fixture.target], homeDir: fixture.home })).ok, true);
-      const stateFile = fixture.config + '.goagy-context.json';
+      const stateFile = fixture.config + '.go-antigravity-context.json';
       if (kind === 'bad-json') fs.writeFileSync(stateFile, '{oops');
       if (kind === 'unknown-version') fs.writeFileSync(stateFile, '{"version":2}\n');
       if (kind === 'external-change') fs.writeFileSync(fixture.config, '{"contextWindow":"user-custom","theme":"new"}\n');
@@ -1050,7 +1050,7 @@ test('binary rollback rewrites only the changed ranges and stages no image copy'
       return fs.renameSync(from, to);
     },
     writeFileSync(file, ...args) {
-      if (String(file).startsWith(fixture.target.path + '.goagy-')) imageSnapshots++;
+      if (String(file).startsWith(fixture.target.path + '.go-antigravity-')) imageSnapshots++;
       return fs.writeFileSync(file, ...args);
     }
   });
@@ -1083,7 +1083,7 @@ test('a failed inverse write still leaves an explicit recovery snapshot', async 
   const result = await patcher.applyKernelPatch({ contextMode: '900k' }, { targets: [fixture.target], homeDir: fixture.home });
   assert.strictEqual(result.ok, false, JSON.stringify(result));
   assert.ok(result.errors.some(message => message.startsWith('回滚 ') && message.includes(fixture.target.path) && message.includes('恢复快照：')));
-  const recovery = filesUnder(fixture.target.dir).filter(file => /\.goagy-.*\.tmp$/.test(file));
+  const recovery = filesUnder(fixture.target.dir).filter(file => /\.go-antigravity-.*\.tmp$/.test(file));
   assert.strictEqual(recovery.length, 1, 'retain exactly the snapshot needed for explicit manual recovery');
   assert.ok(fs.readFileSync(recovery[0]).equals(buildKernel()));
   assert.ok(fs.readFileSync(fixture.target.backupPath).equals(buildKernel()), 'a verified snapshot still preserves the pristine backup');
@@ -1098,7 +1098,7 @@ test('failed inverse recovery preserves the pristine backup and never advertises
       const original = read(fixture.target);
       let rollbackArmed = false;
       const recoveryHandles = new Set();
-      const isRecovery = file => String(file).startsWith(fixture.target.path + '.goagy-');
+      const isRecovery = file => String(file).startsWith(fixture.target.path + '.go-antigravity-');
       const patcher = loadPatcher({
         renameSync(from, to) {
           if (to === fixture.cliConfig) { rollbackArmed = true; throw new Error('injected config commit failure'); }
@@ -1307,8 +1307,8 @@ test('current payload fingerprints are frozen so editorial edits stay deliberate
   // v2 payloads are short enough that a same-length typo could still pass the budget and phrase
   // assertions above, so the exact bytes are pinned as well.
   const hashes = {
-    tier3: '41ab8c0b50736f166537247dac2d345a0316b225129bccba18ddedf8feedc2fc',
-    tier4: '9abbfdd3a22745f4e74a83394572ff34b49d55ee243c6b44ca42f15cf665d25e'
+    tier3: '0c094316a6b8b842f7972133e72fd09900fa2b81bf864eac3f560db59fb0c0dc',
+    tier4: '22889db4f5e635696976b4d592773d69d4e1045aa295db8bc79b7b378b34d660'
   };
   for (const [key, expected] of Object.entries(hashes)) {
     assert.strictEqual(createHash('sha256').update(JSON.stringify(payloads.tiers[key])).digest('hex'), expected, key);
@@ -1317,7 +1317,7 @@ test('current payload fingerprints are frozen so editorial edits stay deliberate
 
 test('new tiers fit measured UTF-8 budgets and retain essential evidence and tool rules', () => {
   const groups = require('../features/kernel-prompt-payloads.json').tiers;
-  const budgets = { tier3: [459, 405, 1250], tier4: [614, 566, 2222] };
+  const budgets = { tier3: [468, 405, 1250], tier4: [623, 566, 2222] };
   for (const [tier, group] of Object.entries(groups)) {
     assert.deepStrictEqual(Object.values(group).map(text => Buffer.byteLength(text, 'utf8')), budgets[tier]);
     const text = Object.values(group).join('\n');
@@ -1385,7 +1385,7 @@ test('marker-only, mixed, damaged and future prompt payloads are never reported 
     buffer => { applyPromptTier(buffer, original, '4', undefined, 1); const slot = parseEmbedTemplates(buffer).get(CORE_SLOTS[0]); buffer[slot.dataOffset + 20] ^= 1; },
     buffer => { applyPromptTier(buffer, original, '4'); writePaddedTemplate(buffer, parseEmbedTemplates(buffer).get(CORE_SLOTS[1]), require('../features/kernel-prompt-payloads.json').tiers.tier3.functionCall); },
     buffer => { writePaddedTemplate(buffer, parseEmbedTemplates(buffer).get(CORE_SLOTS[0]), 'Argon Grounding Override'); },
-    buffer => { writePaddedTemplate(buffer, parseEmbedTemplates(buffer).get(CORE_SLOTS[0]), 'Goagy balanced v3'); },
+    buffer => { writePaddedTemplate(buffer, parseEmbedTemplates(buffer).get(CORE_SLOTS[0]), 'Go-Antigravity balanced v3'); },
     buffer => { applyPromptTier(buffer, original, '4'); writePaddedTemplate(buffer, parseEmbedTemplates(buffer).get(BLOAT_SLOTS[0]), ''); }
   ];
   for (const mutate of mutations) {
@@ -1499,7 +1499,7 @@ test('same-layout tampering and mixed context fail closed without overwriting th
 });
 
 test('optional synthetic artifacts retain exact sizes, hashes and restoration evidence', () => {
-  const root = process.env.GOAGY_KERNEL_EVIDENCE_DIR;
+  const root = process.env.GO_ANTIGRAVITY_KERNEL_EVIDENCE_DIR;
   if (!root) return;
   const { createHash } = require('node:crypto');
   fs.mkdirSync(root, { recursive: true });
@@ -1529,7 +1529,7 @@ test('optional synthetic artifacts retain exact sizes, hashes and restoration ev
 test('backup compression only runs for an existing backup and never forces a recompress', async (t) => {
   const calls = [];
   const patcher = loadPatcher({}, (command, args, options, callback) => { calls.push({ command, args }); callback(null); });
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'goagy-compact-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'go-antigravity-compact-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   assert.strictEqual(await patcher.compressBackup(path.join(dir, 'missing.bak')), false);
   assert.deepStrictEqual(calls, []);

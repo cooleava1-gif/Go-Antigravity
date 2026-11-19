@@ -7,7 +7,7 @@ class Events extends EventEmitter {
   constructor(dataDir) {
     super();
     this.setMaxListeners(0);
-    this.file = path.join(dataDir, 'goagy.log');
+    this.file = path.join(dataDir, 'go-antigravity.log');
     this.history = [];
   }
 

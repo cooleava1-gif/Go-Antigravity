@@ -91,7 +91,7 @@ test('native public deadline includes DNS/TLS and Stop destroys a pending reques
   controller.abort(); assert.equal(await pending, false); assert.equal(calls[1].destroyed, true);
 });
 test('both connector modes remove all proxy spellings while fixed credentials stay isolated', () => {
-  const env = { PATH: 'bin', HTTP_PROXY: 'secret', https_proxy: 'secret', ALL_PROXY: 'secret', No_Proxy: 'secret', TUNNEL_TOKEN: 'named', GOAGY_POCKET_PIN: '12345678' };
+  const env = { PATH: 'bin', HTTP_PROXY: 'secret', https_proxy: 'secret', ALL_PROXY: 'secret', No_Proxy: 'secret', TUNNEL_TOKEN: 'named', GO_ANTIGRAVITY_MOBILE_PIN: '12345678' };
   assert.deepEqual(cloudflaredEnvironment(env, 'quick'), { PATH: 'bin' });
   assert.deepEqual(cloudflaredEnvironment(env, 'fixed'), { PATH: 'bin', TUNNEL_TOKEN: 'named' });
   assert.equal(env.HTTP_PROXY, 'secret');
@@ -185,27 +185,27 @@ test('synchronous replacement spawn failures settle promptly under the same cumu
 });
 test('named token precedes external YAML and only connector environment contains it across recovery', async t => {
   const token = 'synthetic-cloudflare-token-12345';
-  const env = { GOAGY_POCKET_MODE: 'fixed', GOAGY_POCKET_FIXED_URL: 'https://mobile.example.test', GOAGY_POCKET_PIN: '12345678',
-    TUNNEL_TOKEN: token, CF_TUNNEL_TOKEN: 'inherited-other', GOAGY_POCKET_CF_CONFIG: 'invalid-relative-config.yml', HTTPS_PROXY: 'private-proxy' };
+  const env = { GO_ANTIGRAVITY_MOBILE_MODE: 'fixed', GO_ANTIGRAVITY_MOBILE_FIXED_URL: 'https://mobile.example.test', GO_ANTIGRAVITY_MOBILE_PIN: '12345678',
+    TUNNEL_TOKEN: token, CF_TUNNEL_TOKEN: 'inherited-other', GO_ANTIGRAVITY_MOBILE_CF_CONFIG: 'invalid-relative-config.yml', HTTPS_PROXY: 'private-proxy' };
   const options = parseRuntimeOptions(env); assert.equal(options.auth, 'token'); assert.equal(options.config, null);
   const args = buildCloudflaredArgs(options); assert.equal(args.at(-1), 'run'); assert.ok(args.every(value => typeof value === 'string')); assert.equal(args.includes(token), false);
   let configReads = 0;
   const f = fixture({ env, checkConfig: async () => { configReads++; throw Error(token); } }); t.after(() => f.supervisor.stop());
   await f.begin(); await f.pending; assert.equal(configReads, 0);
   const origin = f.calls[0].options.env;
-  assert.equal(origin.GOAGY_POCKET_PIN, env.GOAGY_POCKET_PIN);
-  for (const key of ['TUNNEL_TOKEN', 'CF_TUNNEL_TOKEN', 'GOAGY_POCKET_CF_CONFIG']) assert.equal(origin[key], undefined);
+  assert.equal(origin.GO_ANTIGRAVITY_MOBILE_PIN, env.GO_ANTIGRAVITY_MOBILE_PIN);
+  for (const key of ['TUNNEL_TOKEN', 'CF_TUNNEL_TOKEN', 'GO_ANTIGRAVITY_MOBILE_CF_CONFIG']) assert.equal(origin[key], undefined);
   assert.equal(f.calls[1].options.env.TUNNEL_TOKEN, token); assert.equal(f.calls[1].options.env.CF_TUNNEL_TOKEN, undefined);
   assert.equal(f.calls[1].options.env.HTTPS_PROXY, undefined);
   f.edge = false; await until(() => f.children.length === 3); f.edge = true;
   await until(() => f.records.filter(record => record.tunnelReady).length === 2);
   assert.equal(f.calls[2].options.env.TUNNEL_TOKEN, token); assert.equal(f.children[0].kills.length, 0);
-  for (const call of f.calls.slice(1)) assert.ok(Object.keys(call.options.env).every(key => !/^GOAGY_POCKET_/i.test(key)));
+  for (const call of f.calls.slice(1)) assert.ok(Object.keys(call.options.env).every(key => !/^GO_ANTIGRAVITY_MOBILE_/i.test(key)));
   assert.doesNotMatch(JSON.stringify(f.records) + JSON.stringify(f.calls.map(call => call.args)), /synthetic-cloudflare-token|inherited-other|private-proxy/);
 });
 test('invalid named token fails before origin spawn with a sanitized protocol error', async () => {
   for (const token of ['bad token', 'token\n', 'token;command', 'x'.repeat(16385)]) {
-    const f = fixture({ env: { GOAGY_POCKET_MODE: 'fixed', GOAGY_POCKET_FIXED_URL: 'https://mobile.example.test', TUNNEL_TOKEN: token } });
+    const f = fixture({ env: { GO_ANTIGRAVITY_MOBILE_MODE: 'fixed', GO_ANTIGRAVITY_MOBILE_FIXED_URL: 'https://mobile.example.test', TUNNEL_TOKEN: token } });
     await assert.rejects(f.supervisor.start(), /FIXED_CONFIG_REQUIRED/); await f.supervisor.done;
     assert.equal(f.calls.length, 0); assert.deepEqual(f.records, [{ error: 'FIXED_CONFIG_REQUIRED' }]);
   }

@@ -26,7 +26,7 @@ function loadDictionary(rootDir) {
 
 // This function also runs inside the AG renderer; keep it independent of Node and module globals.
 function installI18n(window, document, dictionary, enabled) {
-  window.__goagyI18n?.dispose();
+  window.__goAntigravityI18n?.dispose();
   const texts = new Map();
   const attributes = new Map();
   const ignored = 'script,style,pre,code,textarea,[contenteditable="true"],[data-testid*="message-content"]';
@@ -86,10 +86,10 @@ function installI18n(window, document, dictionary, enabled) {
       }
       texts.clear();
       attributes.clear();
-      if (window.__goagyI18n === runtime) delete window.__goagyI18n;
+      if (window.__goAntigravityI18n === runtime) delete window.__goAntigravityI18n;
     }
   };
-  window.__goagyI18n = runtime;
+  window.__goAntigravityI18n = runtime;
   if (enabled) {
     translate(document.body || document.documentElement);
     observer.observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['placeholder', 'title', 'aria-label'] });
