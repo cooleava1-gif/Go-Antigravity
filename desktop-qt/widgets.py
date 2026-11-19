@@ -441,30 +441,37 @@ class QuotaBarWidget(QWidget):
         self._reset = reset_text
         self._disabled = disabled
         self._dark = True
-        self.setMinimumHeight(30)
-        self.setMaximumHeight(34)
+        # Reserve both lines before the card grid measures this row.
+        self.setFixedHeight(sum(QFontMetrics(font, self).height() for font in self._fonts()) + 11)
         self.setToolTip(f"{self._full_label}：{f'{self._pct:.0f}%' if self._pct is not None else '未开放'}" + (f" ({self._reset})" if self._reset else ""))
 
     def set_dark(self, dark: bool) -> None:
         self._dark = dark
         self.update()
 
+    def _fonts(self) -> tuple[QFont, QFont]:
+        label = QFont(self.font())
+        label.setPointSize(9)
+        value = QFont("Cascadia Mono", 9)
+        value.setBold(True)
+        return label, value
+
     def _text_layout(self, label_metrics: QFontMetrics, value_metrics: QFontMetrics) -> tuple[QRectF, QRectF, str, str]:
         if self._disabled or self._pct is None:
-            value_text = self._reset or "未开放"
+            value = self._reset or "未开放"
         else:
-            value_text = f"{self._pct:.0f}%" + (f" · {self._reset}" if self._reset else "")
-        width = float(self.width())
-        gap = min(6.0, width)
-        # Qt elision can need one extra pixel after integer font-metric rounding.
-        label_reserve = min(float(label_metrics.horizontalAdvance(self._label) + 1), width * 0.45)
-        value_width = min(float(value_metrics.horizontalAdvance(value_text) + 1), max(0.0, width - gap - label_reserve))
-        label_width = max(0.0, width - value_width - gap)
-        label_rect = QRectF(0, 0, label_width, 16)
-        value_rect = QRectF(width - value_width, 0, value_width, 16)
-        label_text = label_metrics.elidedText(self._label, Qt.TextElideMode.ElideRight, int(label_width))
-        value_text = value_metrics.elidedText(value_text, Qt.TextElideMode.ElideRight, int(value_width))
-        return label_rect, value_rect, label_text, value_text
+            value = f"{self._pct:.0f}%" + (f" · {self._reset}" if self._reset else "")
+        width = self.width()
+        label_needed = label_metrics.horizontalAdvance(self._label) + 1
+        value_needed = value_metrics.horizontalAdvance(value) + 1
+        if label_needed + value_needed + 6 <= width:
+            right = QRectF(width - value_needed, 0, value_needed, self.height() - 10)
+            left = QRectF(0, 0, width - value_needed - 6, right.height())
+        else:
+            left = QRectF(0, 0, width, label_metrics.height())
+            right = QRectF(0, left.bottom() + 1, width, value_metrics.height())
+        return (left, right, label_metrics.elidedText(self._label, Qt.TextElideMode.ElideRight, int(left.width())),
+                value_metrics.elidedText(value, Qt.TextElideMode.ElideRight, int(right.width())))
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
@@ -479,12 +486,8 @@ class QuotaBarWidget(QWidget):
             pct_val = self._pct
             bar_color = _qcolor(c["red"] if pct_val <= 0 else c["amber"] if pct_val < 25 else c["green"])
 
-        font = QFont(self.font())
-        font.setPointSize(9)
-        mono = QFont("Cascadia Mono", 9)
-        mono.setBold(True)
-
-        label_rect, value_rect, left_text, value_text = self._text_layout(QFontMetrics(font), QFontMetrics(mono))
+        font, mono = self._fonts()
+        label_rect, value_rect, left_text, value_text = self._text_layout(QFontMetrics(font, self), QFontMetrics(mono, self))
 
         painter.setFont(font)
         painter.setPen(_qcolor(c["subtext"]))
@@ -494,7 +497,7 @@ class QuotaBarWidget(QWidget):
         painter.setPen(bar_color)
         painter.drawText(value_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, value_text)
 
-        track = QRectF(0, 20, max(12.0, float(w)), 6.0)
+        track = QRectF(0, value_rect.bottom() + 4, float(w), 6.0)
         track_bg = QColor(7, 11, 19, 130) if self._dark else QColor(203, 213, 225, 165)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(track_bg)

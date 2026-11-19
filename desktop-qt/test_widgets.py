@@ -300,6 +300,9 @@ class AccountIdentityLayoutTests(unittest.TestCase):
                 self.assertGreater(label_rect.width(), 0)
                 self.assertGreater(value_rect.width(), 0)
                 self.assertLessEqual(value_rect.right(), bar.width())
+                self.assertGreaterEqual(label_rect.height(), label_metrics.height())
+                self.assertGreaterEqual(value_rect.height(), value_metrics.height())
+                self.assertLessEqual(value_rect.bottom() + 10, bar.height())
                 self.assertLessEqual(label_metrics.horizontalAdvance(label_text), label_rect.width())
                 self.assertLessEqual(value_metrics.horizontalAdvance(value_text), value_rect.width())
                 if pct is not None:
