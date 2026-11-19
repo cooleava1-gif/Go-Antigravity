@@ -1061,7 +1061,58 @@ test('a failed inverse write still leaves an explicit recovery snapshot', async 
   const recovery = filesUnder(fixture.target.dir).filter(file => /\.goagy-.*\.tmp$/.test(file));
   assert.strictEqual(recovery.length, 1, 'retain exactly the snapshot needed for explicit manual recovery');
   assert.ok(fs.readFileSync(recovery[0]).equals(buildKernel()));
+  assert.ok(fs.readFileSync(fixture.target.backupPath).equals(buildKernel()), 'a verified snapshot still preserves the pristine backup');
+  assert.ok(result.errors.some(message => message.includes('保留原始备份：' + fixture.target.backupPath)));
   assertConfigUnchanged(fixture);
+});
+
+test('failed inverse recovery preserves the pristine backup and never advertises a partial snapshot', async t => {
+  for (const failure of ['partial-write', 'fsync', 'readback']) {
+    await t.test(failure, async t => {
+      const fixture = setupPatchCase(t);
+      const original = read(fixture.target);
+      let rollbackArmed = false;
+      const recoveryHandles = new Set();
+      const isRecovery = file => String(file).startsWith(fixture.target.path + '.goagy-');
+      const patcher = loadPatcher({
+        renameSync(from, to) {
+          if (to === fixture.cliConfig) { rollbackArmed = true; throw new Error('injected config commit failure'); }
+          return fs.renameSync(from, to);
+        },
+        openSync(file, flags, ...args) {
+          if (rollbackArmed && file === fixture.target.path && flags === 'r+') throw new Error('injected inverse lock');
+          const fd = fs.openSync(file, flags, ...args);
+          if (isRecovery(file)) recoveryHandles.add(fd);
+          return fd;
+        },
+        writeFileSync(file, bytes, ...args) {
+          if (isRecovery(file) && failure === 'partial-write') {
+            fs.writeFileSync(file, Buffer.from(bytes).subarray(0, 7), ...args);
+            throw Object.assign(new Error('injected snapshot disk full'), { code: 'ENOSPC' });
+          }
+          return fs.writeFileSync(file, bytes, ...args);
+        },
+        fsyncSync(fd) {
+          if (failure === 'fsync' && recoveryHandles.has(fd)) throw new Error('injected snapshot fsync failure');
+          return fs.fsyncSync(fd);
+        },
+        readFileSync(file, ...args) {
+          if (failure === 'readback' && isRecovery(file)) return Buffer.from('bad readback');
+          return fs.readFileSync(file, ...args);
+        }
+      });
+      const result = await patcher.applyKernelPatch({ contextMode: '900k' }, { targets: [fixture.target], homeDir: fixture.home });
+      assert.strictEqual(result.ok, false, JSON.stringify(result));
+      assert.ok(fs.existsSync(fixture.target.backupPath), 'keep the same-round pristine backup when binary rollback fails');
+      assert.ok(fs.readFileSync(fixture.target.backupPath).equals(original));
+      assert.ok(!read(fixture.target).equals(original), 'the inverse-write failure must be reached');
+      assert.match(result.errors.join('\n'), /恢复快照创建失败/);
+      assert.ok(!result.errors.some(line => line.includes('恢复快照：')), 'an unverified file must not be advertised as a recovery snapshot');
+      assert.ok(result.errors.some(line => line.includes('保留原始备份：' + fixture.target.backupPath)));
+      assertConfigUnchanged(fixture);
+      assertNoTransactionTemps(fixture);
+    });
+  }
 });
 
 test('JSON member surgery handles every position and JSON value type without changing other bytes', () => {
@@ -1152,6 +1203,51 @@ test('a kernel patched by the removed custom tier is still recognised and restor
   const restored = Buffer.from(buffer);
   applyPromptTier(restored, original, 'stock');
   assert.ok(restored.equals(original), 'stock restore ignores the legacy header');
+});
+
+function buildLegacyCustomKernel(original) {
+  const buffer = Buffer.from(original), slots = parseEmbedTemplates(original);
+  const text = 'Synthetic legacy custom prompt for restoration.';
+  const hash = require('node:crypto').createHash('sha256').update(text).digest('hex');
+  const header = ('GO-ANTIGRAVITY:CUSTOM:1;BYTES=' + String(Buffer.byteLength(text)).padStart(10, '0') + ';SHA256=' + hash + ';').padEnd(128, ' ');
+  writePaddedTemplate(buffer, slots.get(CORE_SLOTS[0]), header + text);
+  for (const name of CORE_SLOTS.slice(1)) writePaddedTemplate(buffer, slots.get(name), '');
+  buffer.write('4883f801e975ffffff90', APPLY_EDITS_OFF + 26, 'hex');
+  return buffer;
+}
+
+test('public stock restore accepts legacy custom images and rejects unrelated tampering', async t => {
+  for (const kind of ['valid', 'code', 'auxiliary', 'identity', 'layout']) {
+    await t.test(kind, async t => {
+      const original = buildKernel(), legacy = buildLegacyCustomKernel(original);
+      const slots = parseEmbedTemplates(original);
+      if (kind === 'code') legacy[0x7000] ^= 1;
+      if (kind === 'auxiliary') legacy[slots.get(BLOAT_SLOTS[0]).dataOffset + 5] ^= 1;
+      if (kind === 'identity') legacy[slots.get('system_prompts/identity.tmpl').dataOffset + 5] ^= 1;
+      if (kind === 'layout') legacy.writeBigUInt64LE(va(slots.get(CORE_SLOTS[0]).dataOffset + 1), ENTRIES_OFF + 4 * 48 + 16);
+      const fixture = setupPatchCase(t, legacy);
+      fs.writeFileSync(fixture.target.backupPath, original);
+      const result = await applyKernelPatch({ promptTier: 'stock', contextMode: 'stock' }, { targets: [fixture.target], homeDir: fixture.home });
+      assert.strictEqual(result.ok, kind === 'valid', JSON.stringify(result));
+      assert.ok(read(fixture.target).equals(kind === 'valid' ? original : legacy));
+      assert.ok(fs.readFileSync(fixture.target.backupPath).equals(original));
+      assertConfigUnchanged(fixture);
+      assertNoTransactionTemps(fixture);
+    });
+  }
+});
+
+test('legacy custom images remain unavailable for compact or context-only applications', async t => {
+  const original = buildKernel(), legacy = buildLegacyCustomKernel(original);
+  const fixture = setupPatchCase(t, legacy);
+  fs.writeFileSync(fixture.target.backupPath, original);
+  for (const request of [{ promptTier: '3' }, { contextMode: '900k' }]) {
+    const result = await applyKernelPatch(request, { targets: [fixture.target], homeDir: fixture.home });
+    assert.strictEqual(result.ok, false);
+    assert.match(result.errors.join('\n'), /已移除的自定义档位/);
+    assert.ok(read(fixture.target).equals(legacy));
+    assertConfigUnchanged(fixture);
+  }
 });
 
 test('the removed custom tier cannot be applied and leaves the kernel untouched', async t => {

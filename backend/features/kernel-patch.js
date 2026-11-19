@@ -657,11 +657,13 @@ function stageSnapshot(entry, key, bytes) {
   if (bytes === null) return;
   const temp = entry.file + '.goagy-' + randomUUID() + '.tmp';
   entry[key] = temp; // Register before writing so partial/failed stages are cleaned too.
+  entry[key + 'Verified'] = false;
   const mode = entry.before === null ? 0o600 : fs.statSync(entry.file).mode & 0o777;
   fs.writeFileSync(temp, bytes, { flag: 'wx', mode });
   const fd = fs.openSync(temp, 'r+');
   try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
   if (!fs.readFileSync(temp).equals(bytes)) throw new Error('暂存文件回读校验失败');
+  entry[key + 'Verified'] = true;
 }
 
 function stageEntries(entries) {
@@ -693,7 +695,7 @@ function commitEntry(entry) {
 function restoreEntry(entry) {
   if (entry.before === null) {
     if (readOptional(entry.file) !== null) fs.unlinkSync(entry.file);
-  } else if (entry.rollbackFile) {
+  } else if (entry.rollbackFileVerified) {
     fs.renameSync(entry.rollbackFile, entry.file);
   } else {
     // The inverse of the forward write: only the ranges that differ between the two images.
@@ -703,19 +705,29 @@ function restoreEntry(entry) {
 }
 
 function rollbackEntries(entries, errors) {
+  const preservedBackups = new Set();
   for (const entry of [...entries].reverse()) {
-    if (!entry.attempted) continue;
+    if (!entry.attempted || preservedBackups.has(entry.file)) continue;
     try {
       if (sameBytes(readOptional(entry.file), entry.before)) continue;
       restoreEntry(entry);
     } catch (error) {
       // Materialise a recovery copy only when the inverse write itself failed, so the expensive
       // snapshot exists exactly in the case a human has to repair the file by hand.
-      if (entry.before !== null && !entry.rollbackFile) {
-        try { stageSnapshot(entry, 'rollbackFile', entry.before); } catch { /* Disk full; reported below. */ }
+      let recoveryError = '';
+      if (entry.before !== null && !entry.rollbackFileVerified) {
+        try { stageSnapshot(entry, 'rollbackFile', entry.before); }
+        catch (snapshotError) { recoveryError = '；恢复快照创建失败：' + snapshotError.message; }
       }
-      entry.keepRecovery = Boolean(entry.rollbackFile);
-      errors.push('回滚 ' + entry.file + ' 失败：' + error.message + '；恢复快照：' + (entry.rollbackFile || '(原文件不存在)'));
+      entry.keepRecovery = entry.rollbackFileVerified === true;
+      let recovery = entry.keepRecovery ? '；恢复快照：' + entry.rollbackFile : recoveryError || '；无已校验恢复快照';
+      if (entry.binary && entry.backupPath) {
+        // The backup was committed and verified before this image was touched. Never delete the
+        // only durable original just because its inverse write or recovery snapshot failed.
+        preservedBackups.add(entry.backupPath);
+        recovery += '；保留原始备份：' + entry.backupPath;
+      }
+      errors.push('回滚 ' + entry.file + ' 失败：' + error.message + recovery);
     }
   }
 }
@@ -935,7 +947,7 @@ function verifyPristineKernel(buffer) {
   }
 }
 
-function verifyBackupMatches(current, backup) {
+function verifyBackupMatches(current, backup, { allowLegacyCustomRestore = false } = {}) {
   if (backup.length !== current.length) {
     return `备份与当前内核大小不一致（备份 ${backup.length} 字节 / 当前 ${current.length} 字节），Antigravity 可能已升级`;
   }
@@ -964,13 +976,25 @@ function verifyBackupMatches(current, backup) {
   }
   const prompt = detectPromptState(currentSlots, current);
   if (prompt.tier === 'unknown') return '提示词处于未知、部分或混合状态，拒绝写入';
-  if (prompt.tier === 'custom') return '提示词处于已移除的自定义档位，请先恢复官方原版再应用其他设置';
+  if (prompt.tier === 'custom' && !allowLegacyCustomRestore) return '提示词处于已移除的自定义档位，请先恢复官方原版再应用其他设置';
   if (new Set(currentGates.map(gate => gate.mode)).size > 1) return '上下文封顶签名处于混合状态，拒绝写入';
   // Reconstruct only an exact known patch plan, then compare every byte. Layout alone cannot
   // establish build identity; no unrelated code, auxiliary text or PE metadata may differ.
   const expected = Buffer.from(backup);
-  try { applyPromptTier(expected, backup, prompt.tier, backupSlots, prompt.payloadVersion || payloads.version); }
-  catch (error) { return error.message; }
+  if (prompt.tier === 'custom') {
+    // An explicit stock restore may discard the retired core text, but nothing outside the three
+    // old custom slots and the known startup-check bypass may differ from this pristine build.
+    const applyEdits = findApplyEditsTail(backup);
+    if (!applyEdits || applyEdits.alreadyBypassed) return '未找到唯一的原始 applyEdits 校验签名，当前内核版本不受支持';
+    for (const name of CORE_SLOTS) {
+      const slot = backupSlots.get(name);
+      current.subarray(slot.dataOffset, slot.dataOffset + slot.dataLength).copy(expected, slot.dataOffset);
+    }
+    applyEdits.bypass.copy(expected, applyEdits.offset);
+  } else {
+    try { applyPromptTier(expected, backup, prompt.tier, backupSlots, prompt.payloadVersion || payloads.version); }
+    catch (error) { return error.message; }
+  }
   for (const gate of currentGates) {
     const signature = CONTEXT_SIGNATURES.find(item => item.id === gate.id);
     const hex = gate.mode === '512k' ? signature.k512 : gate.mode === '900k' ? signature.k900 : signature.stock;
@@ -1009,7 +1033,7 @@ async function applyKernelPatchTransaction({ promptTier, contextMode } = {}, opt
       const current = fs.readFileSync(target.path), saved = readOptional(target.backupPath);
       const backup = saved === null ? current : saved;
       verifyPristineKernel(backup);
-      const mismatch = verifyBackupMatches(current, backup);
+      const mismatch = verifyBackupMatches(current, backup, { allowLegacyCustomRestore: tier === 'stock' });
       if (mismatch) throw new Error(mismatch + '；请恢复同版本官方原始内核和备份后重试');
       const next = Buffer.from(current), targetLogs = ['▶ ' + target.label];
       let promptResult = null;
@@ -1022,7 +1046,7 @@ async function applyKernelPatchTransaction({ promptTier, contextMode } = {}, opt
         targetLogs.push('[上下文] ' + (gates.length ? '已改写 ' + gates.length + ' 处封顶判断 → ' + CONTEXT_MODES[mode].label : '未找到可改写的封顶签名'));
       }
       if (saved === null) entries.push({ file: target.backupPath, before: null, after: backup });
-      const binary = { file: target.path, before: current, after: next, binary: true };
+      const binary = { file: target.path, before: current, after: next, binary: true, backupPath: target.backupPath };
       if (!next.equals(current)) entries.push(binary);
       plans.push({ targetLogs, changed: !next.equals(current), promptResult });
     } catch (error) { errors.push(target.path + '：' + error.message); }
