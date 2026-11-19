@@ -55,6 +55,16 @@ def backend_node_executable(environment: QProcessEnvironment) -> Path | None:
     return candidate if candidate.name.lower() == "node.exe" and candidate.is_file() else None
 
 
+def _canonical_path(value: str) -> str:
+    """Expand 8.3 short names before comparing: TEMP can arrive as C:\\Users\\RUNNER~1\\... ."""
+    text = str(value)
+    try:
+        text = os.path.realpath(text)
+    except (OSError, ValueError):
+        pass
+    return ntpath.normcase(ntpath.normpath(text))
+
+
 def is_project_backend_process(root: Path, process: dict[str, Any]) -> bool:
     """Match the actual absolute entry argument; an executable alone proves nothing."""
     executable = process.get("executable")
@@ -64,11 +74,10 @@ def is_project_backend_process(root: Path, process: dict[str, Any]) -> bool:
     tokens = [quoted if quoted else plain for quoted, plain in re.findall(r'"([^\"]*)"|(\S+)', command)]
     if len(tokens) < 2:
         return False
-    normalize = lambda value: ntpath.normcase(ntpath.normpath(value))
-    expected = normalize(str(Path(root).resolve() / "backend" / "server.js"))
+    expected = _canonical_path(str(Path(root) / "backend" / "server.js"))
     node = ntpath.basename(executable).lower()
     return (node == "node.exe" and ntpath.isabs(tokens[1])
-            and normalize(tokens[1]) == expected)
+            and _canonical_path(tokens[1]) == expected)
 
 
 def _temporary_prefix(root: Path) -> str:

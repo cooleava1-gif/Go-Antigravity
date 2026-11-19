@@ -11,6 +11,7 @@
 - **独立实现替换**：`backend/adapters/desktop/language-service-discovery.js` 与 `backend/features/context-widget.js` 改写为独立实现（对外接口、错误文案、数值阈值和 DOM 契约保持不变），因此第三方声明里对应的归属段不再需要保留。
 - **文档与署名**：第三方声明只保留 PyQt6 / Qt / Node 等实际依赖的许可清单；README 致谢只保留汉化词典（nicktan @ linux.do）。
 - **测试**：后端 `npm run verify` 734 项全过（测试数量不变）；Qt 侧 5 个测试文件 77 项与 `smoke_test.py` 110 项全过。
+- **跨机器路径兼容**：识别自家后端进程时先展开 8.3 短路径（例如 CI 临时目录 `C:\Users\RUNNER~1\AppData\Local\Temp`），长、短两种写法的同一路径不再被判成陌生进程；新增回归测试，卷未启用 8.3 短名时自动跳过。
 
 
 ## 未发布：去掉补丁的空间开销，提示词只留两档（2026-11-19）

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -13,6 +14,16 @@ from PyQt6.QtCore import QCoreApplication, QObject, pyqtSignal
 import runtime
 
 _REAL_PROCESS = runtime.QProcess
+
+
+def windows_short_path(path: Path):
+    """Return the 8.3 short form of an existing path, or None when the volume keeps none."""
+    if os.name != "nt":
+        return None
+    import ctypes
+    buffer = ctypes.create_unicode_buffer(32768)
+    written = ctypes.windll.kernel32.GetShortPathNameW(str(path), buffer, len(buffer))
+    return buffer.value if 0 < written < len(buffer) else None
 
 
 def discovery_process(payload, exit_code=0):
@@ -244,6 +255,18 @@ class BackendProcessIdentityTests(unittest.TestCase):
         self.assertTrue(runtime.is_project_backend_process(root, {
             "executable": r"C:\Program Files\nodejs\node.exe",
             "commandLine": f'"C:\\Program Files\\nodejs\\node.exe" "{script}"'}))
+
+    def test_short_and_long_path_forms_of_the_same_entry_match(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "go-antigravity project"
+            (root / "backend").mkdir(parents=True)
+            (root / "backend/server.js").touch()
+            short = windows_short_path(root)
+            if not short or short.casefold() == str(root).casefold():
+                self.skipTest("volume keeps no 8.3 short names")
+            self.assertTrue(runtime.is_project_backend_process(root, {
+                "executable": r"C:\Program Files\nodejs\node.exe",
+                "commandLine": f'"C:\\Program Files\\nodejs\\node.exe" "{short}\\backend\\server.js"'}))
 
     def test_script_argument_not_incidental_text_must_match(self):
         root = Path(tempfile.gettempdir()) / "go-antigravity-project"
