@@ -141,7 +141,7 @@ const WINDOWS_QUERY = [
   'Get-CimInstance -ClassName Win32_Process -Filter "Name=\'language_server.exe\'" |',
   'ForEach-Object {',
   '  if ((Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid).Sid -ne $me) { return }',
-  "  if ($_.CommandLine -notmatch '(^|\s)--standalone(\s|=|$)') { return }",
+  String.raw`  if ($_.CommandLine -notmatch '(^|\s)--standalone(\s|=|$)') { return }`,
   '  [pscustomobject]@{ ProcessId = $_.ProcessId; CommandLine = $_.CommandLine }',
   '} | ConvertTo-Json -Compress'
 ].join(' ');

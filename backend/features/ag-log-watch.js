@@ -1,5 +1,5 @@
 'use strict';
-// Watches AG's own language-server log for the one failure the preflight cannot see.
+// Watches AG's own language-server log for failures the preflight cannot see.
 //
 // The preflight probes generativelanguage.googleapis.com with no credentials. Google decides the
 // region gate after it has authenticated the caller, so an exit region it refuses produces a green
@@ -18,6 +18,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const GEO_GATE = 'User location is not supported';
+const ACCOUNT_REJECTED = /\[auth-status\][^\r\n]*\breason=ineligible\b[^\r\n]*\bvalid=false\b/;
 const DEFAULT_POLL_MS = 2000;
 // One dialog per incident. A user who sends five messages while the node is wrong gets one
 // explanation, not five identical ones.
@@ -57,6 +58,7 @@ function createAgLogWatcher({
   let handle = null;
   let offset = 0;
   let lastReported = 0;
+  let lastAuthReported = -Infinity;
   let watching = false;
 
   function report() {
@@ -88,8 +90,13 @@ function createAgLogWatcher({
       fsImpl.readSync(handle, buffer, 0, length, offset);
     } catch { return; }
     offset += length;
-    if (now() - lastReported < cooldownMs) return;
-    if (buffer.toString('utf8').includes(GEO_GATE)) report();
+    const text = buffer.toString('utf8');
+    const scannedAt = now();
+    if (scannedAt - lastReported >= cooldownMs && text.includes(GEO_GATE)) report();
+    if (scannedAt - lastAuthReported >= cooldownMs && ACCOUNT_REJECTED.test(text)) {
+      lastAuthReported = scannedAt;
+      events.log('SYSTEM', 'Antigravity 当前账户未通过资格检查。请在 Antigravity 查看账号验证提示，或在工作台选择其他账户。', 'tag-alert');
+    }
   }
 
   return {
@@ -98,6 +105,7 @@ function createAgLogWatcher({
     start() {
       if (watching) return;
       watching = true;
+      lastAuthReported = -Infinity;
       // Seed from the current end of file: everything before this point belongs to a previous run.
       try { offset = fsImpl.statSync(logPath).size; } catch { offset = 0; }
       onStateChange(true);

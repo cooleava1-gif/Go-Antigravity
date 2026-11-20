@@ -6,7 +6,8 @@
 //   之后加解密是纯 Node 同步调用。
 // - 主密钥存在 Windows 凭据管理器（`go-antigravity:accounts-key`），它本身由 DPAPI 按当前
 //   用户加密，因此 accounts.json 被拷到别的机器/别的 Windows 用户下都解不开。
-// - 读不到主密钥时（非 Windows、PowerShell 故障）不阻塞使用：退回明文模式并明确告警。
+// - 读不到主密钥时（非 Windows、PowerShell 故障）不阻塞读取：账户仍能显示、切换，
+//   但普通模式拒绝把令牌明文写盘/备份（写入直接失败），只有显式 plaintext 排障开关才允许明文。
 const crypto = require('node:crypto');
 
 const PREFIX = 'enc:v1:';
@@ -40,7 +41,7 @@ const isEncrypted = value => typeof value === 'string' && value.startsWith(PREFI
  * @param {() => Promise<Buffer|null>} options.readKey  从凭据管理器读主密钥
  * @param {(key: Buffer) => Promise<void>} options.writeKey 首次使用时写入主密钥
  * @param {(message: string, cls?: string) => void} [options.log]
- * @param {boolean} [options.plaintext] 只加密以外的场景用：强制明文落盘（排障用）
+ * @param {boolean} [options.plaintext] 显式授权明文落盘（排障用，默认关；仍可读回既有密文）
  */
 function createVault({ readKey, writeKey, log = () => {}, plaintext = false }) {
   let key = null;
@@ -67,18 +68,27 @@ function createVault({ readKey, writeKey, log = () => {}, plaintext = false }) {
     } catch (error) {
       key = null;
       reason = error.message || String(error);
-      log(`账户加密不可用：${reason}；令牌将以明文保存`, 'tag-alert');
+      log(`账户加密不可用：${reason}；${plaintext ? '已按显式明文排障模式继续' : '普通模式下将拒绝以明文写入令牌'}`, 'tag-alert');
     }
     return Boolean(key);
   }
 
   const canOpen = () => Boolean(key);
+  // 能否真正加密。mobile-secrets 用它判断凭据可用性，语义保持不变。
   const sealEnabled = () => Boolean(key) && !plaintext;
+  // 显式明文排障授权：只有构造时显式传 plaintext:true 才为真，不要用 sealEnabled 反推。
+  const plaintextAllowed = () => plaintext === true;
 
   function seal(value) {
     if (typeof value !== 'string' || !value) return value;
     if (isEncrypted(value)) return value; // 已经是密文，避免二次加密
-    if (!sealEnabled()) return value;
+    if (plaintextAllowed()) return value; // 显式排障：允许明文落盘
+    if (!key) {
+      // 普通模式加密不可用：宁可这次写盘失败，也不能把令牌明文落盘或备份。
+      const error = new Error(`账户加密不可用（${reason}），已拒绝以明文写入令牌`);
+      error.code = 'vault_locked';
+      throw error;
+    }
     return encode(key, value);
   }
 
@@ -106,6 +116,7 @@ function createVault({ readKey, writeKey, log = () => {}, plaintext = false }) {
     isEncrypted,
     canOpen,
     sealEnabled,
+    plaintextAllowed,
     get reason() { return reason; },
     keyTarget: KEY_TARGET
   };

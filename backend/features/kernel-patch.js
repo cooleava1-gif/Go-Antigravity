@@ -55,8 +55,8 @@ const PAD_OPEN = '{{- /*';
 const PAD_CLOSE = '*/ -}}';
 
 // Byte signatures for `utils.GetCheckpointConfig` and `DefaultSerializer.populateContextWindowMetadata`.
-// Each entry carries the stock bytes plus the 512K and 900K replacements, all the same length, so a
-// patch can never move an instruction boundary.
+// Stock CLI/Desktop checkpoints already cap at 256K. The older IDE needs a 256K replacement.
+// Retain 900K signatures to migrate older binaries against their original backups.
 const CONTEXT_SIGNATURES = Object.freeze([
   {
     id: 'cli_main_256k_cap',
@@ -75,6 +75,7 @@ const CONTEXT_SIGNATURES = Object.freeze([
   {
     id: 'cli_serializer_max_ctx',
     desc: 'CLI/Desktop populateContextWindowMetadata 前端上限显示值',
+    displayOnly: true,
     stock: '4889442470488b8c24a80100008908b830000000',
     k512: '4889442470c70000d0070090909090b830000000',
     k900: '4889442470c70000000f0090909090b830000000'
@@ -83,6 +84,7 @@ const CONTEXT_SIGNATURES = Object.freeze([
     id: 'ide_main_128k_cap',
     desc: 'IDE GetCheckpointConfig 主路径 128K (0x1f400) cmovb 封顶',
     stock: '8b4c245429d181f900f40100ba00f401000f42d18954244c',
+    k256: '8b4c245429d181f900e80300ba00e803000f42d18954244c',
     k512: '8b4c245429d181f900d00700ba00d007000f42d18954244c',
     k900: '8b4c245429d181f900f4010089ca9090909090908954244c'
   }
@@ -99,17 +101,16 @@ const PROMPT_TIERS = Object.freeze({
   stock: { key: 'stock', label: '官方原版', short: '官方', visible: true, legacy: false, payloadVersion: null, detail: '从同版本原始 .bak 还原全部官方模板及提示词校验字节；上下文设置独立控制' },
   '1': { key: '1', label: '旧 1 档 · 兼容识别', short: '旧 1 档', visible: false, legacy: true, payloadVersion: 1, detail: '旧版清空两个辅助模板；仅识别和还原，请显式选择新版档位' },
   '2': { key: '2', label: '旧 2 档 · 兼容识别', short: '旧 2 档', visible: false, legacy: true, payloadVersion: 1, detail: '旧版清空七个辅助模板；仅识别和还原，请显式选择新版档位' },
-  '3': { key: '3', label: '精简', short: '精简', visible: true, legacy: false, payloadVersion: 2, detail: '保留全部辅助模板，以较短文本重写三个核心槽；保留必要证据、工具与失败回读规则' },
-  '4': { key: '4', label: '均衡（兼容识别）', short: '均衡', visible: false, legacy: false, payloadVersion: 2, detail: '保留全部辅助模板，重写三个核心槽，保留旧版均衡载荷以便识别和还原' },
+  '3': { key: '3', label: '最大化精简', short: '最大化精简', visible: true, legacy: false, payloadVersion: payloads.version, detail: '缩短三个核心指令模板，保留授权、证据、工具及核验规则' },
+  '4': { key: '4', label: '旧均衡档', short: '旧均衡', visible: false, legacy: true, payloadVersion: 2, detail: '仅用于识别和恢复旧版内核' },
   // Detection-only: the custom-prompt feature was removed, so a kernel that still carries its header
   // must stay identifiable and restorable, but it can never be selected as a target again.
   custom: { key: 'custom', label: '自定义（已移除）', short: '旧自定义', visible: false, legacy: true, payloadVersion: 3, detail: '已移除的本地自定义提示词档位；仅用于识别旧内核状态，可用官方原版还原' }
 });
 
 const CONTEXT_MODES = Object.freeze({
-  stock: { key: 'stock', label: '官方默认 (256K / 128K)', short: '默认', tokens: 0, configValue: null },
-  '512k': { key: '512k', label: '解锁 512K 上下文', short: '512K', tokens: 512000, configValue: '512K' },
-  '900k': { key: '900k', label: '解锁 900K / 1M 上下文', short: '900K', tokens: 983040, configValue: '900K' }
+  '256k': { key: '256k', label: '256K（默认）', short: '256K', tokens: 256000, configValue: '256K' },
+  '512k': { key: '512k', label: '512K', short: '512K', tokens: 512000, configValue: '512K' }
 });
 
 function normalizePromptTier(value) {
@@ -125,11 +126,9 @@ function normalizePromptTier(value) {
 }
 
 function normalizeContextMode(value) {
-  if (value === undefined || value === null || value === '') return 'stock';
-  const key = String(value).trim().toLowerCase();
-  if (key === 'restore' || key === 'stock' || key === 'reset' || key === 'default') return 'stock';
-  if (key === '512k' || key === '512') return '512k';
-  if (key === '900k' || key === '1m' || key === '900' || key === 'max') return '900k';
+  const key = String(value ?? '').trim().toLowerCase();
+  if (['', '256k', '256', 'restore', 'stock', 'reset', 'default'].includes(key)) return '256k';
+  if (['512k', '512', '900k', '1m', '900', 'max'].includes(key)) return '512k';
   return null;
 }
 
@@ -340,12 +339,22 @@ function writePaddedTemplate(buffer, slot, text) {
 // Prompt tiers
 // ============================================================================
 
-function payloadFor(tier, slot, version = payloads.version) {
-  const groups = version === 1 ? payloads.legacyTiers : version === payloads.version ? payloads.tiers : null;
+const PAYLOADS_BY_VERSION = { 1: payloads.legacyTiers, 2: payloads.previousTiers, [payloads.version]: payloads.tiers };
+const KNOWN_CORE_PAYLOADS = Object.entries(PAYLOADS_BY_VERSION).flatMap(([version, tiers]) => {
+  const payloadVersion = Number(version);
+  return Object.keys(tiers).flatMap(key => {
+    const state = { tier: key.slice(4), payloadVersion, legacy: payloadVersion !== payloads.version };
+    // The former brand name changed only the first line of each v2 guidelines slot.
+    return payloadVersion === 2 ? [state, { ...state, payloadVariant: 'goagy' }] : [state];
+  });
+});
+
+function payloadFor(tier, slot, version, variant) {
+  const groups = PAYLOADS_BY_VERSION[version];
   const group = groups?.['tier' + tier];
   const key = slot.endsWith('guidelines.tmpl') ? 'guidelines' : slot.endsWith('function_call.tmpl') ? 'functionCall' : 'communicationStyle';
   if (!group || typeof group[key] !== 'string') throw new Error('未知的提示词载荷版本或档位');
-  return group[key];
+  return variant === 'goagy' && key === 'guidelines' ? group[key].replace(/^Go-Antigravity /, 'Goagy ') : group[key];
 }
 
 function matchesPaddedTemplate(buffer, slot, text) {
@@ -370,7 +379,7 @@ function declaresTemplate(buffer, name) {
 }
 
 function detectPromptState(slots, buffer) {
-  const state = (tier, payloadVersion = null) => ({ tier, payloadVersion, legacy: payloadVersion === 1 });
+  const state = (tier, payloadVersion = null) => ({ tier, payloadVersion, legacy: payloadVersion !== null && payloadVersion !== payloads.version });
   if ([IDENTITY_SLOT, ...CORE_SLOTS].some(name => !slots.has(name))) return state('unknown');
   if ([...BLOAT_SLOTS, ...AD_SLOTS].some(name => !slots.has(name) && declaresTemplate(buffer, name))) return state('unknown');
   const bloat = presentSlots(slots, BLOAT_SLOTS);
@@ -383,12 +392,11 @@ function detectPromptState(slots, buffer) {
   if (hasLegacyCustomHeader(buffer.toString('utf8', guidelines.dataOffset, guidelines.dataOffset + guidelines.dataLength)) && noStripped(bloat)) {
     return { tier: 'custom', payloadVersion: 3, legacy: true };
   }
-  for (const version of [payloads.version, 1]) {
-    for (const tier of ['3', '4']) {
-      const helpersMatch = version === 1 ? allStripped(bloat) : noStripped(bloat);
-      if (helpersMatch && CORE_SLOTS.every(name => matchesPaddedTemplate(buffer, slots.get(name), payloadFor(tier, name, version)))) {
-        return state(tier, version);
-      }
+  for (const known of KNOWN_CORE_PAYLOADS) {
+    const { tier, payloadVersion, payloadVariant } = known;
+    const helpersMatch = payloadVersion === 1 ? allStripped(bloat) : noStripped(bloat);
+    if (helpersMatch && CORE_SLOTS.every(name => matchesPaddedTemplate(buffer, slots.get(name), payloadFor(tier, name, payloadVersion, payloadVariant)))) {
+      return { ...known };
     }
   }
   // A marker alone is never a version signature. Reject partial/mixed known payloads and padding.
@@ -397,9 +405,9 @@ function detectPromptState(slots, buffer) {
     const text = buffer.toString('utf8', slot.dataOffset, slot.dataOffset + slot.dataLength);
     // Only a trailing whitespace-only pad comment counts as a write of ours: official templates also
     // open with PAD_OPEN, so the bare opener cannot be treated as a patch signature.
-    // legacy marker from earlier builds: kernels patched under the old name still start with it
-    return activeTemplateText(text) !== text || text.startsWith(LEGACY_CUSTOM_MARKER) || text.startsWith('Goagy ') || [1, payloads.version].some(version =>
-      ['3', '4'].some(tier => text.startsWith(payloadFor(tier, name, version).slice(0, 40))));
+    return activeTemplateText(text) !== text || text.startsWith(LEGACY_CUSTOM_MARKER) || text.startsWith('Goagy ')
+      || KNOWN_CORE_PAYLOADS.some(({ tier, payloadVersion, payloadVariant }) =>
+        text.startsWith(payloadFor(tier, name, payloadVersion, payloadVariant).slice(0, 40)));
   });
   if (rewritten) return state('unknown');
   if (allStripped(bloat)) return state('2', 1);
@@ -429,9 +437,9 @@ function findApplyEditsTail(buffer) {
 // Applies a tier to `buffer`, always re-seeding every slot from `backup` first. This is what makes
 // tier switching idempotent: no matter what the file looked like before, the result depends only
 // on (backup, tier).
-function applyPromptTier(buffer, backup, tier, slots, payloadVersion = payloads.version) {
+function applyPromptTier(buffer, backup, tier, slots, payloadVersion = PROMPT_TIERS[tier]?.payloadVersion, payloadVariant) {
   if (!Object.hasOwn(PROMPT_TIERS, tier)) throw new Error('未知的提示词档位：' + tier);
-  if (tier === 'custom') throw new Error('自定义提示词档位已移除，请选择官方原版或精简');
+  if (tier === 'custom') throw new Error('自定义提示词档位已移除，请选择官方原版或最大化精简');
   const backupSlots = parseEmbedTemplates(backup);
   if ([IDENTITY_SLOT, ...CORE_SLOTS].some(name => !backupSlots.has(name))) {
     throw new Error('内核缺少必要模板槽位，当前版本不受支持');
@@ -453,10 +461,11 @@ function applyPromptTier(buffer, backup, tier, slots, payloadVersion = payloads.
     throw new Error('未找到唯一的原始 applyEdits 校验签名，当前内核版本不受支持');
   }
   const rewritten = tier === '3' || tier === '4';
+  const corePayload = name => payloadFor(tier, name, payloadVersion, payloadVariant);
   // Validate every replacement before mutating even the in-memory output buffer.
   if (rewritten) {
     for (const name of CORE_SLOTS) {
-      const text = payloadFor(tier, name, payloadVersion);
+      const text = corePayload(name);
       const capacity = Math.min(SLOT_CAPACITY[name], backupSlots.get(name).dataLength);
       if (Buffer.byteLength(text, 'utf8') > capacity) throw new Error(
         '模板 ' + name + ' 载荷 ' + Buffer.byteLength(text, 'utf8') + ' 字节超过容量上限 ' + capacity + ' 字节');
@@ -474,13 +483,13 @@ function applyPromptTier(buffer, backup, tier, slots, payloadVersion = payloads.
       writePaddedTemplate(buffer, slot, '');
       strippedBytes += slot.dataLength;
     }
-    if (rewritten) for (const name of CORE_SLOTS) writePaddedTemplate(buffer, backupSlots.get(name), payloadFor(tier, name, payloadVersion));
+    if (rewritten) for (const name of CORE_SLOTS) writePaddedTemplate(buffer, backupSlots.get(name), corePayload(name));
   }
   if (applyEdits) (tier === 'stock' ? applyEdits.stock : applyEdits.bypass).copy(buffer, applyEdits.offset);
   if (!buffer.subarray(identity.dataOffset, identity.dataOffset + identity.dataLength).equals(originalIdentity)) {
     throw new Error('严重错误：identity.tmpl 身份校验区被改动，已中止写入');
   }
-  const coreBytes = rewritten ? CORE_SLOTS.reduce((sum, name) => sum + Buffer.byteLength(payloadFor(tier, name, payloadVersion), 'utf8'), 0) : null;
+  const coreBytes = rewritten ? CORE_SLOTS.reduce((sum, name) => sum + Buffer.byteLength(corePayload(name), 'utf8'), 0) : null;
   const message = tier === 'stock' ? '已从同版本备份还原全部官方模板及提示词校验字节'
     : '已应用 [' + PROMPT_TIERS[tier].label + ']：' + (rewritten ? '重写三个核心模板，载荷 ' + coreBytes + ' 字节' : '旧版兼容模板')
       + '；' + (strippedBytes ? '清空辅助模板 ' + strippedBytes + ' 字节' : '保留全部辅助模板');
@@ -497,25 +506,35 @@ function applyPromptTier(buffer, backup, tier, slots, payloadVersion = payloads.
 // Context window unlock
 // ============================================================================
 
+const CONTEXT_HEX_KEYS = { stock: 'stock', '256k': 'k256', '512k': 'k512', '900k': 'k900' };
+const CONTEXT_SIGNATURE_BY_ID = new Map(CONTEXT_SIGNATURES.map(signature => [signature.id, signature]));
+
+function contextModeFromGates(gates = []) {
+  const modes = new Set();
+  for (const gate of gates) {
+    const signature = CONTEXT_SIGNATURE_BY_ID.get(gate.id);
+    if (!signature || signature.displayOnly) continue;
+    // Stock on Windows IDE is 128K. The stock CLI/Desktop signatures already mean 256K.
+    modes.add(gate.mode === 'stock' && !signature.k256 ? '256k' : gate.mode);
+  }
+  if (modes.size === 0) return 'unknown';
+  return modes.size === 1 ? modes.values().next().value : 'mixed';
+}
+
 function detectContextMode(buffer) {
-  // A kernel only counts as "unlocked" when every signature it actually carries has been
-  // rewritten; a mixed state means a partial write and must not be sold as a working unlock.
-  const present = CONTEXT_SIGNATURES.filter(signature => buffer.includes(Buffer.from(signature.stock, 'hex'))
-    || buffer.includes(Buffer.from(signature.k512, 'hex')) || buffer.includes(Buffer.from(signature.k900, 'hex')));
-  if (present.length === 0) return 'stock';
-  if (present.every(signature => buffer.includes(Buffer.from(signature.stock, 'hex')))) return 'stock';
-  if (present.every(signature => buffer.includes(Buffer.from(signature.k900, 'hex')))) return '900k';
-  if (present.every(signature => buffer.includes(Buffer.from(signature.k512, 'hex')))) return '512k';
-  // Partially rewritten: surface the strongest single rewrite so the UI can flag it as abnormal.
-  if (present.some(signature => buffer.includes(Buffer.from(signature.k900, 'hex')))) return '900k';
-  return '512k';
+  return contextModeFromGates(inspectContextGates(buffer));
+}
+
+function contextSignatureMode(signature, mode) {
+  return mode === '256k' && !signature.k256 ? 'stock' : mode;
 }
 
 function inspectContextGates(buffer) {
   const gates = [];
   for (const signature of CONTEXT_SIGNATURES) {
-    for (const [mode, hex] of [['stock', signature.stock], ['512k', signature.k512], ['900k', signature.k900]]) {
-      const bytes = Buffer.from(hex, 'hex');
+    for (const [mode, key] of Object.entries(CONTEXT_HEX_KEYS)) {
+      if (!signature[key]) continue;
+      const bytes = Buffer.from(signature[key], 'hex');
       for (let offset = buffer.indexOf(bytes); offset !== -1; offset = buffer.indexOf(bytes, offset + bytes.length)) {
         gates.push({ id: signature.id, desc: signature.desc, mode, offset });
       }
@@ -525,23 +544,29 @@ function inspectContextGates(buffer) {
 }
 
 function applyContextPatch(buffer, backup, mode) {
-  const logs = [];
+  if (mode !== 'stock' && !Object.hasOwn(CONTEXT_MODES, mode)) throw new Error('未知的上下文档位：' + mode);
+  // Anchor every occurrence on the pristine backup, including repeated gates in one build.
+  const plan = [];
   for (const signature of CONTEXT_SIGNATURES) {
     const stock = Buffer.from(signature.stock, 'hex');
-    // Anchor every occurrence on the pristine backup, including repeated gates in one build.
-    const replacement = Buffer.from(mode === '512k' ? signature.k512 : mode === '900k' ? signature.k900 : signature.stock, 'hex');
+    const rawMode = contextSignatureMode(signature, mode);
     for (let offset = backup.indexOf(stock); offset !== -1; offset = backup.indexOf(stock, offset + stock.length)) {
-      replacement.copy(buffer, offset);
-      logs.push({ id: signature.id, desc: signature.desc, mode, offset });
+      plan.push({ id: signature.id, desc: signature.desc, mode: rawMode, offset });
     }
   }
-  if (mode !== 'stock' && logs.length === 0) throw new Error('未找到可改写的上下文封顶签名，当前内核版本不受支持');
+  if (mode !== 'stock' && !plan.some(gate => !CONTEXT_SIGNATURE_BY_ID.get(gate.id).displayOnly)) {
+    throw new Error('未找到可改写的上下文封顶签名，当前内核版本不受支持');
+  }
+  for (const gate of plan) {
+    const signature = CONTEXT_SIGNATURE_BY_ID.get(gate.id);
+    Buffer.from(signature[CONTEXT_HEX_KEYS[gate.mode]], 'hex').copy(buffer, gate.offset);
+  }
   const actual = inspectContextGates(buffer);
-  if (actual.length !== logs.length || actual.some(gate => gate.mode !== mode
-    || !logs.some(expected => expected.id === gate.id && expected.offset === gate.offset))) {
+  if (actual.length !== plan.length || actual.some(gate => !plan.some(expected =>
+    expected.id === gate.id && expected.offset === gate.offset && expected.mode === gate.mode))) {
     throw new Error('上下文封顶签名校验失败：并非所有 gate 都处于目标档位');
   }
-  return logs;
+  return plan;
 }
 
 // Config and binary changes share a staged transaction. A stable sidecar records this tool's
@@ -624,7 +649,7 @@ function editContextMember(text, literal) {
 function sameBytes(a, b) { return a === null ? b === null : b !== null && a.equals(b); }
 
 function prepareContextConfig(mode, homeDir) {
-  const value = CONTEXT_MODES[mode].configValue;
+  const value = mode === 'stock' ? null : CONTEXT_MODES[mode].configValue;
   const files = [path.join(homeDir, '.gemini', 'config', 'config.json'), path.join(homeDir, '.gemini', 'antigravity-cli', 'settings.json')];
   const entries = [], logs = [];
   for (const file of files) {
@@ -643,7 +668,7 @@ function prepareContextConfig(mode, homeDir) {
         jsonMembers(stateText);
         if (state.version !== 1 || typeof state.existed !== 'boolean'
           || (state.existed ? typeof state.originalText !== 'string' : state.originalText !== null)
-          || typeof state.appliedText !== 'string' || !['512K', '900K'].includes(state.appliedValue)) {
+          || typeof state.appliedText !== 'string' || !['256K', '512K', '900K', '1M'].includes(state.appliedValue)) {
           throw new Error('不认识的上下文恢复记录，拒绝修改');
         }
         if (state.existed) { jsonObject(state.originalText); jsonMembers(state.originalText); }
@@ -813,6 +838,7 @@ function detectConfiguredContextCap(homeDir = os.homedir()) {
     const key = String(value || '').toUpperCase();
     if (key === '900K' || key === '1M') return 983040;
     if (key === '512K') return 512000;
+    if (key === '256K') return 256000;
   } catch { /* No config yet: the kernel default applies. */ }
   return 0;
 }
@@ -849,58 +875,60 @@ function writeChangedRanges(file, oldBuffer, newBuffer) {
 }
 
 // Pass paths as data, including portable installations with spaces or quotes in the directory.
-function kernelProcessCount(paths, stop = false) {
+// Counting only: this tool never terminates a language server. A killed server drops the user's
+// in-flight conversations, and the write it was blocking can wait for a clean exit instead.
+function kernelProcessCount(paths) {
   const script = path.join(__dirname, 'kernel-processes.ps1');
   const args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script];
-  if (stop) args.push('-StopTargets');
   return new Promise((resolve, reject) => {
     execFile('powershell.exe', args, {
       windowsHide: true, timeout: 15000,
       env: { ...process.env, GO_ANTIGRAVITY_KERNEL_TARGET_PATHS: JSON.stringify(paths) }
     }, (error, stdout) => {
       if (error || !/^\d+$/.test(String(stdout).trim())) {
-        reject(new Error('无法确认或关闭此用户的目标内核，请手动退出 Antigravity 后重试'));
+        reject(new Error('无法确认此用户的目标内核是否正在运行，请手动退出 Antigravity 后重试'));
       } else resolve(Number(stdout));
     });
   });
 }
 
-async function languageServerRunning() {
-  return (await kernelProcessCount(resolveTargets().map(target => target.path))) > 0;
+// Same user + exact image path only: an unrelated install, another user's session, or a merely
+// open IDE shell that has not started its language server never matches, so a false "running"
+// cannot block a patch it has no reason to block.
+async function languageServerRunning(paths = resolveTargets().map(target => target.path)) {
+  return (await kernelProcessCount(paths)) > 0;
 }
 
 // Windows lets a running .exe be renamed inside its own directory, so a patched kernel can be put
 // in place without killing the language server (which would drop the user's open conversations).
+// When even the rename is blocked the patch fails instead: a lost conversation is worse than a
+// deferred patch, and the caller rolls the whole transaction back to the committed backup.
 async function writeBinaryWithUnlock(file, oldBuffer, newBuffer) {
   if (oldBuffer.equals(newBuffer)) return { written: 0, strategy: 'unchanged' };
   try {
     return { written: writeChangedRanges(file, oldBuffer, newBuffer), strategy: 'in-place' };
   } catch { /* The image is locked by a running process; fall through. */ }
+  if (!fs.existsSync(file)) throw new Error('内核文件不存在，无法写入');
 
   const stale = `${file}.old_run`;
   try { fs.unlinkSync(stale); } catch { /* Nothing stale to clear. */ }
-  if (fs.existsSync(file)) {
-    try {
-      fs.renameSync(file, stale);
-      try {
-        fs.writeFileSync(file, newBuffer);
-        try { fs.unlinkSync(stale); } catch { /* Best effort. */ }
-        return { written: newBuffer.length, strategy: 'rename-replace' };
-      } catch (error) {
-        try { fs.renameSync(stale, file); } catch { /* The original name is gone; reported below. */ }
-        throw error;
-      }
-    } catch { /* Rename blocked too (leftover .old_run still held): fall through to the kill path. */ }
+  try {
+    fs.renameSync(file, stale);
+  } catch {
+    throw new Error('内核文件被运行中的 Antigravity 或安全软件锁定，无法写入；请先完全退出 Antigravity 后重试');
   }
-
-  await kernelProcessCount([file], true);
-  for (const wait of [40, 80, 150]) {
-    await new Promise(resolve => setTimeout(resolve, wait));
-    try { fs.unlinkSync(stale); } catch { /* Still held; the next attempt may succeed. */ }
-    try { return { written: writeChangedRanges(file, oldBuffer, newBuffer), strategy: 'kill-and-write' }; }
-    catch { /* Retry. */ }
+  try {
+    fs.writeFileSync(file, newBuffer);
+    try { fs.unlinkSync(stale); } catch { /* Best effort. */ }
+    return { written: newBuffer.length, strategy: 'rename-replace' };
+  } catch (error) {
+    // Put the original image back under its own name before giving up, so the kernel on disk is
+    // never left renamed away. A copy is the second chance when the rename back is itself blocked;
+    // the durable .bak committed earlier in this transaction remains either way.
+    try { fs.renameSync(stale, file); }
+    catch { try { fs.copyFileSync(stale, file); fs.unlinkSync(stale); } catch { /* Reported below. */ } }
+    throw error;
   }
-  return { written: writeChangedRanges(file, oldBuffer, newBuffer), strategy: 'kill-and-write' };
 }
 
 // ============================================================================
@@ -918,7 +946,7 @@ function inspectTarget(target) {
     promptTier: 'stock',
     promptPayloadVersion: null,
     promptLegacy: false,
-    contextMode: 'stock',
+    contextMode: 'unknown',
     slots: [],
     gates: [],
     error: null
@@ -934,6 +962,7 @@ function inspectTarget(target) {
     const slots = parseEmbedTemplates(buffer);
     const list = [...slots.values()].sort((a, b) => a.name.localeCompare(b.name));
     const prompt = detectPromptState(slots, buffer);
+    const gates = inspectContextGates(buffer);
     return {
       ...base,
       exists: true,
@@ -941,11 +970,11 @@ function inspectTarget(target) {
       promptTier: prompt.tier,
       promptPayloadVersion: prompt.payloadVersion,
       promptLegacy: prompt.legacy,
-      contextMode: detectContextMode(buffer),
+      contextMode: contextModeFromGates(gates),
       slots: list,
       activeSlotBytes: list.reduce((sum, slot) => sum + slot.activeBytes, 0),
       totalSlotCapacity: list.reduce((sum, slot) => sum + slot.dataLength, 0),
-      gates: inspectContextGates(buffer)
+      gates
     };
   } catch (error) {
     return { ...base, exists: true, sizeBytes: buffer.length, error: error.message };
@@ -954,9 +983,20 @@ function inspectTarget(target) {
 
 function inspectKernel(options = {}) {
   const targets = options.targets || resolveTargets(options.env);
+  const inspected = targets.map(inspectTarget);
+  let contextConfigNeedsSync = false;
+  if (Object.hasOwn(CONTEXT_MODES, options.contextMode) && inspected.some(target => target.exists)) {
+    try {
+      contextConfigNeedsSync = prepareContextConfig(options.contextMode, options.homeDir || os.homedir()).entries.length > 0;
+    } catch {
+      // Let the patch transaction report the specific invalid or externally changed config.
+      contextConfigNeedsSync = true;
+    }
+  }
   return {
     platformSupported: process.platform === 'win32',
-    targets: targets.map(inspectTarget)
+    targets: inspected,
+    contextConfigNeedsSync
   };
 }
 
@@ -1008,7 +1048,10 @@ function verifyBackupMatches(current, backup, { allowLegacyCustomRestore = false
   const prompt = detectPromptState(currentSlots, current);
   if (prompt.tier === 'unknown') return '提示词处于未知、部分或混合状态，拒绝写入';
   if (prompt.tier === 'custom' && !allowLegacyCustomRestore) return '提示词处于已移除的自定义档位，请先恢复官方原版再应用其他设置';
-  if (new Set(currentGates.map(gate => gate.mode)).size > 1) return '上下文封顶签名处于混合状态，拒绝写入';
+  if (new Set(currentGates.map(gate => gate.mode)).size > 1 && !currentGates.every(gate =>
+    gate.mode === contextSignatureMode(CONTEXT_SIGNATURE_BY_ID.get(gate.id), '256k'))) {
+    return '上下文封顶签名处于混合状态，拒绝写入';
+  }
   // Reconstruct only an exact known patch plan, then compare every byte. Layout alone cannot
   // establish build identity; no unrelated code, auxiliary text or PE metadata may differ.
   const expected = Buffer.from(backup);
@@ -1023,12 +1066,12 @@ function verifyBackupMatches(current, backup, { allowLegacyCustomRestore = false
     }
     applyEdits.bypass.copy(expected, applyEdits.offset);
   } else {
-    try { applyPromptTier(expected, backup, prompt.tier, backupSlots, prompt.payloadVersion || payloads.version); }
+    try { applyPromptTier(expected, backup, prompt.tier, backupSlots, prompt.payloadVersion, prompt.payloadVariant); }
     catch (error) { return error.message; }
   }
   for (const gate of currentGates) {
-    const signature = CONTEXT_SIGNATURES.find(item => item.id === gate.id);
-    const hex = gate.mode === '512k' ? signature.k512 : gate.mode === '900k' ? signature.k900 : signature.stock;
+    const signature = CONTEXT_SIGNATURE_BY_ID.get(gate.id);
+    const hex = signature[CONTEXT_HEX_KEYS[gate.mode]];
     Buffer.from(hex, 'hex').copy(expected, gate.offset);
   }
   if (!expected.equals(current)) return '当前内核与备份在已知补丁区域之外或非完整已知载荷处不同，可能版本不匹配或被篡改';
@@ -1049,12 +1092,12 @@ async function applyKernelPatchTransaction({ promptTier, contextMode } = {}, opt
   // An explicit request for the removed tier is rejected instead of silently degrading to stock:
   // only a saved preference from an older build is migrated by normalizePromptTier.
   const requestedTier = promptTier === undefined || promptTier === null ? null : String(promptTier).trim().toLowerCase().replace(/^tier/, '');
-  if (requestedTier === 'custom' || requestedTier === 'replace') throw new Error('自定义提示词档位已移除，请选择官方原版或精简');
+  if (requestedTier === 'custom' || requestedTier === 'replace') throw new Error('自定义提示词档位已移除，请选择官方原版或最大化精简');
   const tier = promptTier === undefined || promptTier === null ? null : normalizePromptTier(promptTier);
   const mode = contextMode === undefined || contextMode === null ? null : normalizeContextMode(contextMode);
   if (promptTier !== undefined && promptTier !== null && tier === null) throw new Error('未知的提示词档位：' + promptTier);
   if (contextMode !== undefined && contextMode !== null && mode === null) throw new Error('未知的上下文档位：' + contextMode);
-  if (tier === '1' || tier === '2') throw new Error('旧提示词档位仅兼容识别和还原，请选择官方原版、均衡或精简');
+  if (tier !== null && !PROMPT_TIERS[tier].visible) throw new Error('旧提示词档位仅兼容识别和还原，请选择官方原版或最大化精简');
   if (tier === null && mode === null) throw new Error('没有需要应用的内核变更');
 
   // Validate every target before creating any backup or modifying any live file.
@@ -1064,22 +1107,24 @@ async function applyKernelPatchTransaction({ promptTier, contextMode } = {}, opt
       const current = fs.readFileSync(target.path), saved = readOptional(target.backupPath);
       const backup = saved === null ? current : saved;
       verifyPristineKernel(backup);
-      const mismatch = verifyBackupMatches(current, backup, { allowLegacyCustomRestore: tier === 'stock' });
+      const mismatch = saved === null ? null : verifyBackupMatches(current, backup, { allowLegacyCustomRestore: tier === 'stock' });
       if (mismatch) throw new Error(mismatch + '；请恢复同版本官方原始内核和备份后重试');
       const next = Buffer.from(current), targetLogs = ['▶ ' + target.label];
-      let promptResult = null;
       if (tier !== null) {
-        promptResult = applyPromptTier(next, backup, tier, undefined, payloads.version);
+        const promptResult = applyPromptTier(next, backup, tier);
         targetLogs.push('[提示词] ' + promptResult.message);
       }
       if (mode !== null) {
         const gates = applyContextPatch(next, backup, mode);
-        targetLogs.push('[上下文] ' + (gates.length ? '已改写 ' + gates.length + ' 处封顶判断 → ' + CONTEXT_MODES[mode].label : '未找到可改写的封顶签名'));
+        const count = gates.filter(gate => !CONTEXT_SIGNATURE_BY_ID.get(gate.id).displayOnly).length;
+        targetLogs.push('[上下文] 已核对 ' + count + ' 处封顶判断 → ' + CONTEXT_MODES[mode].label);
       }
-      if (saved === null) entries.push({ file: target.backupPath, before: null, after: backup });
-      const binary = { file: target.path, before: current, after: next, binary: true, backupPath: target.backupPath };
-      if (!next.equals(current)) entries.push(binary);
-      plans.push({ targetLogs, changed: !next.equals(current), promptResult });
+      const changed = !next.equals(current);
+      if (changed) {
+        if (saved === null) entries.push({ file: target.backupPath, before: null, after: backup });
+        entries.push({ file: target.path, before: current, after: next, binary: true, backupPath: target.backupPath });
+      }
+      plans.push({ targetLogs, changed });
     } catch (error) { errors.push(target.path + '：' + error.message); }
   }
   if (plans.length === 0 && errors.length === 0) errors.push('未找到可应用的 Antigravity 内核');
@@ -1120,7 +1165,6 @@ async function applyKernelPatchTransaction({ promptTier, contextMode } = {}, opt
     rollbackEntries(entries, errors);
     if (!errors.some(message => message.startsWith('回滚 '))) logs.push('[回滚] 已恢复本轮所有已变更目标');
   } finally { cleanupEntries(entries, errors); }
-  const promptResult = plans.map(plan => plan.promptResult).find(Boolean);
   return {
     ok: errors.length === 0,
     logs,
@@ -1128,12 +1172,6 @@ async function applyKernelPatchTransaction({ promptTier, contextMode } = {}, opt
     promptTier: tier,
     contextMode: mode
   };
-}
-
-async function killLanguageServers() {
-  const paths = resolveTargets().map(target => target.path);
-  const wasRunning = (await kernelProcessCount(paths, true)) > 0;
-  return { wasRunning, stillRunning: wasRunning && (await kernelProcessCount(paths)) > 0 };
 }
 
 module.exports = {
@@ -1155,6 +1193,7 @@ module.exports = {
   detectPromptTier,
   detectPromptState,
   detectContextMode,
+  contextModeFromGates,
   inspectContextGates,
   applyPromptTier,
   applyContextPatch,
@@ -1163,6 +1202,5 @@ module.exports = {
   inspectKernel,
   applyKernelPatch,
   verifyBackupMatches,
-  killLanguageServers,
   languageServerRunning
 };

@@ -1,4 +1,8 @@
-"""Find an existing project backend or own one child process without blocking Qt."""
+"""Find an existing project backend or own one child process without blocking Qt.
+
+A data directory must never have two backend writers: `launch_lock()` serializes every path that
+creates a backend, and every such path re-scans for an existing backend while holding the lock.
+"""
 from __future__ import annotations
 
 import hashlib
@@ -20,6 +24,18 @@ from backend_client import extract_boot_token, local_request
 
 
 BACKEND_PROTOCOL = "go-antigravity/desktop-v1"
+LAUNCH_LOCK_NAME = ".desktop-qt-backend.lock"
+# A backend that is starting up, or quitting after a normal desktop exit, is visible as a process
+# before it can answer the handshake. Wait this long for it instead of reporting a mismatch.
+EXISTING_WAIT_SECONDS = 12.0
+LOCK_WAIT_SECONDS = 20.0
+RETRY_DISCOVERY_MS = 400
+LOCK_RETRY_MS = 250
+PROBE_INTERVAL_SECONDS = 1.5
+LOCK_BUSY_MESSAGE = (
+    "数据目录正被另一个 Go-Antigravity 实例使用（可能仍在启动，或来自另一份程序目录），本次启动已取消。"
+    "请先关闭该实例后重试；若确需并行运行两套程序，请为它们分别设置 GO_ANTIGRAVITY_DATA_DIR。"
+)
 
 
 def packaged_data_directory(environment: QProcessEnvironment) -> Path:
@@ -44,6 +60,17 @@ def data_directory_id(directory: Path) -> str:
     if os.name == "nt":
         canonical = canonical.lower()
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def launch_lock(data_directory: Path) -> QLockFile:
+    """Cross-process guard: at most one backend creator per data directory.
+
+    Staleness is decided by the recorded owner PID alone (setStaleLockTime(0)), so a lock left by a
+    killed or crashed instance is taken over on the next launch instead of blocking it forever.
+    """
+    lock = QLockFile(str(Path(data_directory) / LAUNCH_LOCK_NAME))
+    lock.setStaleLockTime(0)
+    return lock
 
 
 def backend_node_executable(environment: QProcessEnvironment) -> Path | None:
@@ -176,6 +203,10 @@ class BackendRuntime(QObject):
         self._data_directory = backend_data_directory(self.root, QProcessEnvironment.systemEnvironment())
         self._lock: QLockFile | None = None
         self._lock_deadline = 0.0
+        self._lock_rechecked = False
+        self._probing = False
+        self._next_probe = 0.0
+        self._existing_deadline = 0.0
         self._startup_deadline = 0.0
         self._waiting_for_lock = False
         self._poll = QTimer(self)
@@ -191,6 +222,10 @@ class BackendRuntime(QObject):
         self._active = True
         self._ready_emitted = False
         self._waiting_for_lock = False
+        self._lock_rechecked = False
+        self._probing = False
+        self._next_probe = 0.0
+        self._existing_deadline = time.monotonic() + EXISTING_WAIT_SECONDS
         self.base_url = ""
         self._existing_pids = []
         self._probe_running = False
@@ -355,7 +390,19 @@ class BackendRuntime(QObject):
 
     def _after_discovery(self) -> None:
         if self._existing_pids:
+            # A backend for this data directory exists but did not pass the handshake yet: it is
+            # either still starting or quitting after a normal exit. Never start a second writer
+            # beside it; give that window a bounded chance to finish, then report the mismatch.
+            if time.monotonic() < self._existing_deadline:
+                QTimer.singleShot(RETRY_DISCOVERY_MS, self._discover)
+                return
             self._fail("已发现同目录的后端，但版本、数据目录或接口不匹配。请关闭旧后端或等待启动完成后重试")
+            return
+        if self._probing:
+            # This scan only looked for a backend this root can reuse; none is usable yet, so keep
+            # waiting for the data-directory lock instead of failing or starting a second writer.
+            self._probing = False
+            QTimer.singleShot(LOCK_RETRY_MS, self._try_launch_lock)
             return
         if self._waiting_for_lock:
             self._waiting_for_lock = False
@@ -369,24 +416,47 @@ class BackendRuntime(QObject):
         except OSError:
             self._fail("无法创建 Go-Antigravity 数据目录，请检查用户目录权限")
             return
-        self._lock = QLockFile(str(self._data_directory / ".desktop-qt-backend.lock"))
-        self._lock.setStaleLockTime(0)
-        self._lock_deadline = time.monotonic() + 20
+        self._lock = launch_lock(self._data_directory)
+        self._lock_deadline = time.monotonic() + LOCK_WAIT_SECONDS
+        self._lock_rechecked = False
+        self._probing = False
+        self._next_probe = time.monotonic() + PROBE_INTERVAL_SECONDS
         self._try_launch_lock()
 
     def _try_launch_lock(self) -> None:
         if not self._active or self._closing or self._lock is None:
             return
         if self._lock.tryLock(0):
-            # Re-scan after obtaining the lock: another Qt instance may have started a backend.
+            # Re-scan after obtaining the lock: another instance may have started a backend.
             self._waiting_for_lock = True
             self._discover()
-        elif time.monotonic() >= self._lock_deadline:
-            self._fail("另一个桌面窗口正在准备后端，请稍后重试")
-        else:
-            QTimer.singleShot(250, self._try_launch_lock)
+            return
+        if time.monotonic() >= self._lock_deadline:
+            if not self._lock_rechecked:
+                # The holder may have finished between our last scan and this deadline: look once
+                # more for the backend it started, then reject without starting a second writer.
+                self._lock_rechecked = True
+                self._probing = True
+                self._discover()
+                return
+            self._fail(LOCK_BUSY_MESSAGE)
+            return
+        # The lock is held elsewhere. A backend this root can reuse must still be found and used:
+        # the lock holder's own backend may have become reachable while we waited.
+        if time.monotonic() >= self._next_probe:
+            self._next_probe = time.monotonic() + PROBE_INTERVAL_SECONDS
+            self._probing = True
+            self._discover()
+            return
+        QTimer.singleShot(LOCK_RETRY_MS, self._try_launch_lock)
 
     def _spawn_backend(self) -> None:
+        # Single-writer invariant: only the lock holder may create a backend, and only after the
+        # re-scan under that lock found none. test_mode owns a unique temporary data directory, so
+        # it cannot collide with another instance and needs no shared lock.
+        if not self.test_mode and not (self._lock is not None and self._lock.isLocked()):
+            self._fail("内部错误：未取得数据目录锁，已取消启动后端")
+            return
         environment = QProcessEnvironment.systemEnvironment()
         executable = backend_node_executable(environment)
         source = self.root / "backend" / "server.js"
@@ -474,10 +544,27 @@ class BackendRuntime(QObject):
         if not self._active or self._closing or self._ready_emitted:
             return
         self._poll.stop()
-        self._release_lock()
+        if not self.owns_process:
+            # A reused backend is not ours: the startup lock has done its job, so drop it. Then mark
+            # the data directory as in use without ever waiting, so another program copy sharing it
+            # reports the data directory as taken instead of starting a second writer.
+            self._release_lock()
+            self._claim_data_directory()
         self._ready_emitted = True
         self.base_url = f"http://127.0.0.1:{port}"
         self.ready.emit(self.base_url)
+
+    def _claim_data_directory(self) -> None:
+        """Best-effort in-use marker: try once, never wait, never fail, never replace a holder."""
+        if self._lock is not None:
+            return
+        try:
+            self._data_directory.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return
+        lock = launch_lock(self._data_directory)
+        if lock.tryLock(0):
+            self._lock = lock
 
     def _child_error(self, error: QProcess.ProcessError) -> None:
         if error == QProcess.ProcessError.FailedToStart and self._active and not self._closing:
@@ -527,14 +614,18 @@ class BackendRuntime(QObject):
         self._active = False
         self._closing = True
         self._poll.stop()
-        self._release_lock()
         for reply in tuple(self._replies):
             reply.abort()
         self._replies.clear()
         if self._discovery is not None:
             self._discovery.kill()
         child = self._child
-        if self.owns_process and child is not None and child.state() != QProcess.ProcessState.NotRunning:
+        owned = (self.owns_process and child is not None
+                 and child.state() != QProcess.ProcessState.NotRunning)
+        if not owned:
+            # The data directory is no longer ours; hold the lock until an owned backend is gone.
+            self._release_lock()
+        if owned:
             child.write(b"quit\n")
             child.closeWriteChannel()
             self._kill_timer.start(8000)

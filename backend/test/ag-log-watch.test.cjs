@@ -12,6 +12,7 @@ const { createAgLogWatcher, resolveLogPath, GEO_GATE } = require('../features/ag
 
 const GEO_LINE = 'I1111 19:24:59.123456  181 errorreport.go:273] agent executor error: generating and executing: FAILED_PRECONDITION (code 400): User location is not supported for the API use.';
 const NOISE = 'I1111 19:24:58.000000  181 server.go:123] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist';
+const ACCOUNT_REJECTED = 'I1120 10:02:01.226926     723 auth_status_telemetry.go:81] [auth-status] ms=1396 reason=ineligible rpc=get_auth_status valid=false';
 
 const POLL_MS = 5;
 const SETTLE_MS = POLL_MS * 10;
@@ -153,6 +154,24 @@ test('无关日志行不会触发报警', async () => {
   await settle();
   watcher.stop();
   assert.equal(events.lines.length, 0);
+});
+
+test('账户资格检查失败单独报告，同次启动重复失败只提示一次', async () => {
+  const { watcher, events, fs: fsImpl } = build({ fs: fakeFs(ACCOUNT_REJECTED + '\n') });
+  watcher.start();
+  try {
+    await settle();
+    assert.deepStrictEqual(events.lines, []);
+    fsImpl.append(`${GEO_LINE}\n${ACCOUNT_REJECTED}\n`);
+    await settle();
+    fsImpl.append(ACCOUNT_REJECTED + '\n');
+    await settle();
+    const auth = events.lines.filter(line => line.channel === 'SYSTEM');
+    assert.equal(auth.length, 1);
+    assert.match(auth[0].message, /账户未通过资格检查/);
+  } finally {
+    watcher.stop();
+  }
 });
 
 test('AG 重启导致日志被截断时，偏移量跟着重置', async () => {

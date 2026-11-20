@@ -320,6 +320,117 @@ test('损坏的账本先备份再重建，不会静默丢数据', () => {
   assert.ok(notices.some(message => message.includes('无法解析')));
 });
 
+test('加密不可用时损坏的账本不复制明文灾备，也不覆盖原文件', async () => {
+  const dir = tempDir();
+  const file = path.join(dir, 'accounts.json');
+  // 语法坏掉的半截 JSON，里面还留着未加密的 refreshToken 片段。
+  const raw = Buffer.from('{ "version": 2, "accounts": [ { "id": "acc-1", "refreshToken": "1//MALFORMEDTOKEN"');
+  fs.writeFileSync(file, raw);
+  const notices = [];
+  const vault = createVault({ readKey: async () => { throw new Error('主密钥不可用'); }, writeKey: async () => {} });
+  await vault.unlock();
+  const accounts = createAccounts(dir, { vault, onNotice: (message, level) => notices.push({ message, level }) });
+
+  // 原文件是唯一还能抢救的东西：不复制（里面就是明文令牌）、不重写、不删除。
+  assert.deepEqual(backups(dir), []);
+  assert.deepEqual(fs.readFileSync(file), raw);
+  assert.deepEqual(accounts.all(), []);
+  const warned = notices.filter(item => item.level === 'warn').map(item => item.message).join('\n');
+  assert.match(warned, /无法解析/);
+  assert.match(warned, /原样保留原文件/);
+  assert.doesNotMatch(warned, /MALFORMEDTOKEN/, '告警不得回显令牌');
+  // JSON.parse 的错误信息会带原始片段，这里必须是固定文案。
+  assert.doesNotMatch(warned, /Unexpected token|is not valid JSON|Expected/);
+
+  // 本次运行只读：连空池都不能回写，否则损坏的原文件就被顶掉了。
+  const before = structuredClone(accounts.all());
+  for (const attempt of [
+    () => accounts.upsert({ email: 'new@example.com', refreshToken: '1//NEWSECRET' }),
+    () => accounts.select(null)
+  ]) {
+    assert.throws(attempt, { code: 'vault_locked' });
+    assert.deepEqual(accounts.all(), before);
+    assert.deepEqual(fs.readFileSync(file), raw);
+    assert.deepEqual(backups(dir), []);
+  }
+
+  // 主密钥恢复后仍按既有契约备份并重建。
+  const healed = createAccounts(dir, { vault: await testVault() });
+  assert.deepEqual(healed.all(), []);
+  assert.equal(backups(dir).length, 1);
+  assert.deepEqual(fs.readFileSync(path.join(dir, backups(dir)[0])), raw);
+});
+
+test('加密不可用且只有被丢弃记录带明文令牌时，原文件同样保持不动', async () => {
+  const dir = tempDir();
+  const file = path.join(dir, 'accounts.json');
+  const raw = Buffer.from(JSON.stringify({
+    version: STATE_VERSION,
+    activeId: 'kept',
+    accounts: [
+      { id: 'kept', name: 'Kept', refreshToken: 'enc:v1:AAAA', accessToken: 'enc:v1:BBBB', status: 'ok' },
+      // 没有 refreshToken，规范化会把它丢掉；它带着明文令牌。
+      { id: 'dropped', name: 'Dropped', accessToken: '1//DROPPEDPLAINTEXT' }
+    ]
+  }, null, 2));
+  fs.writeFileSync(file, raw);
+  const notices = [];
+  const vault = createVault({ readKey: async () => { throw new Error('主密钥不可用'); }, writeKey: async () => {} });
+  await vault.unlock();
+  const accounts = createAccounts(dir, { vault, onNotice: (message, level) => notices.push({ message, level }) });
+
+  // 幸存记录只有密文，但被丢弃的记录里还有明文令牌：原文件必须原样保留，也不能新建灾备。
+  assert.equal(accounts.all().length, 1);
+  assert.equal(accounts.all()[0].id, 'kept');
+  assert.equal(accounts.all()[0].locked, true);
+  assert.deepEqual(fs.readFileSync(file), raw);
+  assert.deepEqual(backups(dir), []);
+  const warned = notices.filter(item => item.level === 'warn').map(item => item.message).join('\n');
+  assert.match(warned, /跳过含明文令牌的灾备副本/);
+  assert.match(warned, /只读展示/);
+  assert.match(warned, /未回写/);
+  assert.doesNotMatch(notices.map(item => item.message).join('\n'), /DROPPEDPLAINTEXT/);
+
+  // 只读：写盘一律失败，原文件与内存保持不变。
+  const before = structuredClone(accounts.all());
+  for (const attempt of [
+    () => accounts.updateQuota('kept', { tier: 'PRO' }),
+    () => accounts.remove('kept')
+  ]) {
+    assert.throws(attempt, { code: 'vault_locked' });
+    assert.deepEqual(accounts.all(), before);
+    assert.deepEqual(fs.readFileSync(file), raw);
+    assert.deepEqual(backups(dir), []);
+  }
+
+  // 主密钥恢复后才备份（令牌已密封）并写回规范化后的账户池。
+  const healed = createAccounts(dir, { vault: await testVault() });
+  assert.equal(healed.all().length, 1);
+  assert.equal(backups(dir).length, 1);
+  assert.doesNotMatch(fs.readFileSync(path.join(dir, backups(dir)[0]), 'utf8'), /DROPPEDPLAINTEXT/);
+});
+
+test('加密可用时坏账本仍然先备份再重建，告警只给备份路径不回显原始片段', async () => {
+  const dir = tempDir();
+  const file = path.join(dir, 'accounts.json');
+  // 语法坏掉但夹着明文令牌字面量：JSON.parse 的错误信息可能把这段原样带出来。
+  const raw = Buffer.from('{ "version": 2, "accounts": [ { "refreshToken": "1//RAWSECRET", }, ] }');
+  fs.writeFileSync(file, raw);
+  const notices = [];
+  const accounts = createAccounts(dir, { vault: await testVault(), onNotice: (message, level) => notices.push({ message, level }) });
+
+  // 既有恢复契约不变：逐字节备份 + 空账户池重建。
+  assert.deepEqual(accounts.all(), []);
+  const saved = backups(dir);
+  assert.equal(saved.length, 1);
+  assert.deepEqual(fs.readFileSync(path.join(dir, saved[0])), raw, '备份必须逐字节保留原文件');
+  const text = notices.map(item => item.message).join('\n');
+  assert.match(text, /无法解析/);
+  assert.ok(text.includes(path.basename(saved[0])), '告警要给出备份文件名');
+  assert.doesNotMatch(text, /RAWSECRET/, '告警不得回显令牌');
+  assert.doesNotMatch(text, /Unexpected token|in JSON at position|is not valid JSON|Expected/);
+});
+
 test('同邮箱重新授权会更新原条目而不是新增', () => {
   const dir = tempDir();
   const accounts = createAccounts(dir);
@@ -708,21 +819,144 @@ test('可解析灾备密封或写备份失败保持原文件且恢复后可重�
   }
 });
 
-test('缺 vault、锁库或 JSON 不可解析时保留原始逐字节灾备', async t => {
-  for (const mode of ['no-vault', 'locked', 'invalid-json']) {
+test('缺 vault 或 JSON 不可解析时保留原始逐字节灾备', async t => {
+  for (const mode of ['no-vault', 'invalid-json']) {
     await t.test(mode, async () => {
       const dir = tempDir();
       const raw = mode === 'invalid-json' ? Buffer.from([0xff, 0x7b, 0x22, 0x00])
         : Buffer.from('\uFEFF' + JSON.stringify(repairBackupFixture()));
       fs.writeFileSync(path.join(dir, 'accounts.json'), raw);
-      const vault = mode === 'locked' ? createVault({ readKey: async () => { throw new Error('synthetic locked'); }, writeKey: async () => {} })
-        : mode === 'invalid-json' ? await testVault() : null;
-      if (mode === 'locked') await vault.unlock();
+      const vault = mode === 'invalid-json' ? await testVault() : null;
       createAccounts(dir, { vault });
       assert.equal(backups(dir).length, 1);
       assert.deepEqual(fs.readFileSync(path.join(dir, backups(dir)[0])), raw);
     });
   }
+});
+
+test('普通模式锁库时不复制明文令牌灾备，原文件与内存保持逐字节不变', async () => {
+  const dir = tempDir();
+  const file = path.join(dir, 'accounts.json');
+  const raw = Buffer.from('\uFEFF' + JSON.stringify(repairBackupFixture()));
+  fs.writeFileSync(file, raw);
+  const vault = createVault({ readKey: async () => { throw new Error('synthetic locked'); }, writeKey: async () => {} });
+  await vault.unlock();
+  const notices = [];
+  const accounts = createAccounts(dir, { vault, onNotice: (message, level) => notices.push({ level, message }) });
+
+  // 记录照旧可读（内存里有明文副本，修复也只发生在内存），但不能为它再造一份明文副本。
+  assert.equal(accounts.find('original-account').refreshToken, 'synthetic-repair-refresh');
+  assert.deepEqual(backups(dir), [], '不得新建明文灾备');
+  assert.deepEqual(fs.readFileSync(file), raw, '加载不得回写');
+  assert.ok(notices.some(item => item.level === 'warn' && /跳过含明文令牌的灾备副本/.test(item.message)), JSON.stringify(notices));
+  assert.ok(notices.some(item => /未回写/.test(item.message)), JSON.stringify(notices));
+
+  // 任何写盘都必须失败关闭，且失败前后文件与内存都一致。
+  const before = structuredClone(accounts.all());
+  for (const mutate of [
+    () => accounts.markStatus('original-account', { status: 'pending' }),
+    () => accounts.updateQuota('original-account', { tier: 'PRO' }),
+    () => accounts.select('original-account')
+  ]) {
+    assert.throws(mutate, error => {
+      assert.equal(error.code, 'vault_locked');
+      assert.match(error.message, /明文/);
+      return true;
+    });
+    assert.deepEqual(accounts.all(), before);
+    assert.deepEqual(fs.readFileSync(file), raw);
+    assert.deepEqual(backups(dir), []);
+  }
+
+  // 密钥恢复后灾备与迁移照常完成，且备份里不含明文令牌。
+  const healed = createAccounts(dir, { vault: await testVault() });
+  assert.equal(healed.find('original-account').refreshToken, 'synthetic-repair-refresh');
+  assert.equal(backups(dir).length, 1);
+  assert.doesNotMatch(fs.readFileSync(path.join(dir, backups(dir)[0]), 'utf8'), /synthetic-/);
+});
+
+test('普通模式锁库时明文账户池只读：拒绝新增/改写令牌，失败前后文件与内存一致', async () => {
+  const dir = tempDir();
+  seedPlaintextPool(dir);
+  const file = path.join(dir, 'accounts.json');
+  const raw = fs.readFileSync(file);
+  const vault = createVault({ readKey: async () => { throw new Error('主密钥不可用'); }, writeKey: async () => {} });
+  await vault.unlock();
+  const notices = [];
+  const accounts = createAccounts(dir, { vault, onNotice: (message, level) => notices.push({ level, message }) });
+
+  assert.deepEqual(fs.readFileSync(file), raw, '加载不得把明文池回写');
+  assert.deepEqual(backups(dir), [], '不得留下明文备份');
+  assert.equal(accounts.find('acc-1').refreshToken, '1//PLAINREFRESH', '内存里账户仍可展示');
+  assert.ok(notices.some(item => item.level === 'warn' && /只读展示/.test(item.message)), JSON.stringify(notices));
+
+  const before = structuredClone(accounts.all());
+  const revision = accounts.credentialRevision('acc-1');
+  const attempts = [
+    () => accounts.updateQuota('acc-1', { tier: 'PRO' }),
+    () => accounts.updateTokens('acc-1', { accessToken: 'ya29.NEWACCESS' }),
+    () => accounts.upsert({ id: 'acc-1', refreshToken: '1//ROTATEDSECRET', accessToken: 'ya29.ROTATED' }),
+    () => accounts.upsert({ email: 'new@example.com', refreshToken: '1//NEWSECRET' }),
+    () => accounts.select('acc-1'),
+    () => accounts.remove('acc-1')
+  ];
+  for (const attempt of attempts) {
+    assert.throws(attempt, { code: 'vault_locked' });
+    assert.deepEqual(accounts.all(), before, '失败后内存必须回到原样');
+    assert.equal(accounts.credentialRevision('acc-1'), revision, '失败后凭据代数必须回滚');
+    assert.deepEqual(fs.readFileSync(file), raw, '失败后文件必须逐字节不变');
+    assert.deepEqual(backups(dir), []);
+  }
+  assert.deepEqual(fs.readdirSync(dir).filter(name => name.endsWith('.tmp')), [], '失败不得留下临时文件');
+  const disk = fs.readFileSync(file, 'utf8');
+  assert.doesNotMatch(disk, /NEWSECRET|ROTATED|NEWACCESS/);
+});
+
+test('锁库但池里只有密文时仍可更新非令牌字段，落盘保持密文', async () => {
+  const dir = tempDir();
+  const file = path.join(dir, 'accounts.json');
+  const good = await testVault();
+  const created = createAccounts(dir, { vault: good }).upsert({
+    name: 'keep', email: 'keep@example.com', refreshToken: '1//KEEPSECRET', accessToken: 'ya29.KEEPACCESS', status: 'ok'
+  });
+  const broken = createVault({ readKey: async () => { throw new Error('主密钥不可用'); }, writeKey: async () => {} });
+  await broken.unlock();
+  const accounts = createAccounts(dir, { vault: broken });
+  assert.equal(accounts.snapshot().items[0].locked, true);
+
+  accounts.updateQuota(created.id, { tier: 'PRO', updatedAt: 1 });
+  const disk = fs.readFileSync(file, 'utf8');
+  assert.match(disk, /enc:v1:/);
+  assert.doesNotMatch(disk, /KEEPSECRET|KEEPACCESS/, '非令牌写入不得把密文降级成明文');
+  assert.doesNotMatch(disk, /"locked"/);
+  assert.equal(accounts.snapshot().items[0].tier, 'PRO');
+
+  const healed = createAccounts(dir, { vault: good });
+  assert.equal(healed.active().refreshToken, '1//KEEPSECRET');
+  assert.equal(healed.active().accessToken, 'ya29.KEEPACCESS');
+});
+
+test('显式明文排障模式仍可明文落盘，锁库时也保留逐字节灾备', async () => {
+  const store = { key: require('node:crypto').randomBytes(32) };
+  const vault = createVault({ readKey: async () => store.key, writeKey: async () => {}, plaintext: true });
+  await vault.unlock();
+  const dir = tempDir();
+  const file = path.join(dir, 'accounts.json');
+  const accounts = createAccounts(dir, { vault });
+  const created = accounts.upsert({ name: 'debug', refreshToken: '1//PLAINTEXT-DEBUG', status: 'ok' });
+  assert.match(fs.readFileSync(file, 'utf8'), /PLAINTEXT-DEBUG/);
+  assert.equal(createAccounts(dir, { vault }).find(created.id).refreshToken, '1//PLAINTEXT-DEBUG');
+  assert.deepEqual(backups(dir), []);
+
+  const lockedDir = tempDir();
+  const lockedFile = path.join(lockedDir, 'accounts.json');
+  const raw = Buffer.from('\uFEFF' + JSON.stringify(repairBackupFixture()));
+  fs.writeFileSync(lockedFile, raw);
+  const explicit = createVault({ readKey: async () => { throw new Error('synthetic locked'); }, writeKey: async () => {}, plaintext: true });
+  await explicit.unlock();
+  createAccounts(lockedDir, { vault: explicit });
+  assert.equal(backups(lockedDir).length, 1, '显式授权明文时灾备保持原样');
+  assert.deepEqual(fs.readFileSync(path.join(lockedDir, backups(lockedDir)[0])), raw);
 });
 
 test('正常已加密池重载无需新备份也不重写密文', async t => {

@@ -51,7 +51,7 @@ function maskToken(token) {
 }
 
 function freshState() {
-  return { version: STATE_VERSION, accounts: [], activeId: null };
+  return { version: STATE_VERSION, accounts: [], activeId: null, startupId: null };
 }
 
 function stamp() {
@@ -101,10 +101,26 @@ function backupFile(dataDir, raw, { prune = true } = {}) {
   return target;
 }
 
+// 灾备快照里是否还留着可直接读出的令牌：加密不可用时，这种快照不能复制落盘。
+function hasPlaintextToken(value) {
+  if (Array.isArray(value)) return value.some(hasPlaintextToken);
+  if (!value || typeof value !== 'object') return false;
+  return Object.entries(value).some(([key, item]) => (TOKEN_FIELDS.includes(key)
+    && typeof item === 'string' && item && !isEncrypted(item)) || hasPlaintextToken(item));
+}
+
 // Seal the parsed pre-repair snapshot, not normalized survivors: dropped/duplicate records
 // and unknown fields are part of the recovery data too. Preserve existing ciphertext as-is.
-function backupParsedState(dataDir, raw, parsed, vault) {
-  if (!vault?.sealEnabled()) return backupFile(dataDir, raw);
+function backupParsedState(dataDir, raw, parsed, vault, notice = () => {}) {
+  // 测试模式（没有 vault）或显式明文排障：保持逐字节原样备份。
+  if (!vault || vault.plaintextAllowed()) return backupFile(dataDir, raw);
+  // 普通模式但加密当前不可用：再复制一份明文令牌等于多留一份落盘明文，所以拒绝新建副本；
+  // 快照里只剩密文（或没有令牌）时照常备份。原文件在任何情况下都不动。
+  if (!vault.sealEnabled()) {
+    if (!hasPlaintextToken(parsed)) return backupFile(dataDir, raw);
+    notice('账户加密不可用，已跳过含明文令牌的灾备副本（原文件未改动）', 'warn');
+    return null;
+  }
   const sealTokens = value => {
     if (Array.isArray(value)) return value.map(sealTokens);
     if (!value || typeof value !== 'object') return value;
@@ -152,9 +168,11 @@ function decryptRecord(raw, vault, notice) {
 }
 
 // Memory -> disk: seal a copy, never the live object. The runtime keeps plaintext so the
-// credential writer and the token refresher keep working unchanged.
+// credential writer and the token refresher keep working unchanged. Plaintext tokens always go
+// through vault.seal, which throws vault_locked in normal mode when encryption is unavailable:
+// the save (and its enclosing transaction) then aborts instead of writing a cleartext token.
 function sealRecord(account, vault) {
-  if (!vault || !vault.sealEnabled()) return account;
+  if (!vault) return account; // 测试模式：没有 vault 就是明文池
   let sealed = null;
   for (const field of TOKEN_FIELDS) {
     const value = account[field];
@@ -218,7 +236,7 @@ function migrateState(parsed, notice, vault) {
   } else if (accounts.length) {
     notice(`账户池已从 v${from ?? '?'} 迁移到 v${STATE_VERSION}，共 ${accounts.length} 个账户`, 'info');
   }
-  return { version: STATE_VERSION, accounts, activeId };
+  return { version: STATE_VERSION, accounts, activeId, startupId: null };
 }
 
 function loadState(file, dataDir, notice, vault = null) {
@@ -231,54 +249,67 @@ function loadState(file, dataDir, notice, vault = null) {
       throw error;
     }
   })();
-  if (raw === null) return { state: freshState(), dirty: false, needsEncrypt: false };
+  if (raw === null) return { state: freshState(), dirty: false, needsEncrypt: false, plaintextTokens: false };
 
   let parsed;
   try {
     parsed = JSON.parse(raw.toString('utf8').replace(/^\uFEFF/, ''));
-  } catch (error) {
+  } catch {
+    // 固定文案：JSON.parse 的错误信息会带上原始片段（可能正是令牌），任何分支都不回显。
+    // 解析不出来的字节里可能正是明文令牌：加密不可用时既不能再复制一份灾备，也不能用空账户池
+    // 覆盖原文件（原文件是唯一还能抢救的东西）。只保留原文件、只读启动，等主密钥恢复。
+    if (vault && !vault.sealEnabled() && !vault.plaintextAllowed()) {
+      notice('账户池文件无法解析，且账户加密不可用：已原样保留原文件，本次运行以只读空账户池启动，请恢复主密钥后再打开', 'warn');
+      return { state: freshState(), dirty: false, needsEncrypt: false, plaintextTokens: false, unreadable: true };
+    }
     const saved = backupFile(dataDir, raw);
-    notice(`账户池文件无法解析（${error.message}），已备份为 ${saved ? path.basename(saved) : '（备份失败）'} 并重新开始`, 'warn');
-    return { state: freshState(), dirty: true, needsEncrypt: false };
+    notice(`账户池文件无法解析，已备份为 ${saved ? path.basename(saved) : '（备份失败）'} 并重新开始`, 'warn');
+    return { state: freshState(), dirty: true, needsEncrypt: false, plaintextTokens: false };
   }
 
+  // 明文判据只看“解析后的原文件内容”：坏结构、重复、被丢弃记录和未知字段里的令牌也算数。
+  // 否则规范化把记录丢掉后就会误判成“没有明文”，紧接着用残留记录覆盖原文件。
+  const filePlaintext = hasPlaintextToken(parsed);
   const looksUsable = parsed && typeof parsed === 'object'
     && parsed.version === STATE_VERSION
     && Array.isArray(parsed.accounts);
   if (!looksUsable) {
-    const saved = backupParsedState(dataDir, raw, parsed, vault);
+    const saved = backupParsedState(dataDir, raw, parsed, vault, notice);
     const migrated = migrateState(parsed, notice, vault);
     if (saved) {
       notice(`账户池结构需升级（v${parsed?.version ?? '?'} → v${STATE_VERSION}），原文件已备份为 ${path.basename(saved)}`, 'info');
     }
-    return { state: migrated, dirty: true, needsEncrypt: false };
+    return { state: migrated, dirty: true, needsEncrypt: false, plaintextTokens: filePlaintext };
   }
 
   // Same schema: still normalize, because a hand-edited record must not crash the launcher.
   const accounts = [];
   let repaired = false;
-  let plaintextTokens = false;
   parsed.accounts.forEach((raw, index) => {
     const record = decryptRecord(raw, vault, notice);
     const account = normalizeAccount(record, index);
     if (!account) { repaired = true; return; }
     if (!sameAccount(record, account)) repaired = true;
-    // Judge the *file* contents, not the decrypted copy: after the first encrypted save every
-    // boot would otherwise look like "needs encrypting" and rewrite the pool for nothing.
-    if (vault?.sealEnabled() && TOKEN_FIELDS.some(field => {
-      const value = raw[field];
-      return typeof value === 'string' && value && !vault.isEncrypted(value);
-    })) plaintextTokens = true;
     accounts.push(account);
   });
+  // 以整份原文件为准，而不是幸存记录：被丢弃/去重的记录若带着明文令牌，规范化写盘会把它抹掉，
+  // 那种情况必须当成“池里还有明文”，拒绝覆盖。加密可用与否也决定要不要自动升级成密文。
+  const plaintextTokens = filePlaintext;
   const activeId = accounts.some(item => item.id === parsed.activeId) ? parsed.activeId : accounts[0]?.id || null;
+  // Older pools selected an account even when the user only saved it. Only an
+  // explicit choice in the current format may replace an existing client login.
+  const startupId = parsed.startupId === activeId ? activeId : null;
   if (repaired) {
-    const saved = backupParsedState(dataDir, raw, parsed, vault);
+    const saved = backupParsedState(dataDir, raw, parsed, vault, notice);
     notice(`账户池存在不完整记录，已规范化${saved ? `（原文件备份为 ${path.basename(saved)}）` : ''}`, 'info');
+  }
+  // 加密不可用又碰上明文令牌池：本次只能读，任何写入都会以 vault_locked 失败；说清原因。
+  if (plaintextTokens && vault && !vault.sealEnabled() && !vault.plaintextAllowed()) {
+    notice('账户加密不可用，账户池文件里仍有明文令牌：本次运行只做只读展示，写入会被拒绝', 'warn');
   }
   // `needsEncrypt` is deliberately separate from `dirty`: upgrading a plaintext pool must not
   // write a plaintext backup, otherwise the "安全" step leaves a copy of the old secrets behind.
-  return { state: { version: STATE_VERSION, accounts, activeId }, dirty: repaired, needsEncrypt: plaintextTokens && !repaired };
+  return { state: { version: STATE_VERSION, accounts, activeId, startupId }, dirty: repaired, needsEncrypt: Boolean(vault?.sealEnabled()) && plaintextTokens && !repaired, plaintextTokens };
 }
 
 function createAccounts(dataDir, { onNotice = () => {}, vault = null } = {}) {
@@ -296,14 +327,37 @@ function createAccounts(dataDir, { onNotice = () => {}, vault = null } = {}) {
       return persisted;
     })
   });
-  const save = () => writeJson(file, serialize());
+  // 账户池本身还是明文、这次运行又既没有主密钥也没有显式明文授权：任何写盘都会把明文令牌再
+  // 落一遍（即使这次只改了配额，甚至只把账户删到空池，也会让删掉的令牌无法再被密封）。
+  // 所以整体拒绝写入，用既有的 vault_locked 让 transact 回滚内存。
+  const readOnlyPool = (Boolean(loaded.plaintextTokens) || Boolean(loaded.unreadable)) && Boolean(vault)
+    && !vault.sealEnabled() && !vault.plaintextAllowed();
+  const readOnlyReason = loaded.unreadable ? '账户池文件无法解析，原文件已保留' : '账户池文件里仍有明文令牌';
+  const save = () => {
+    if (readOnlyPool) {
+      const error = new Error(`账户加密不可用（${vault.reason || '主密钥不可用'}），${readOnlyReason}：本次运行只读，已拒绝写入`);
+      error.code = 'vault_locked';
+      throw error;
+    }
+    writeJson(file, serialize());
+  };
   // Persist migrated/repaired state once right away, so the next launch does not migrate and
-  // re-back-up the same file again.
-  if (loaded.needsEncrypt) {
-    save();
+  // re-back-up the same file again. 拒绝明文回写（vault_locked）是预期结果：账户仍要能读、
+  // 能展示，原文件保持不动，密钥恢复后下一次加载再修复。其他写盘错误照旧抛出。
+  const saveOnLoad = () => {
+    try {
+      save();
+      return true;
+    } catch (error) {
+      if (error.code !== 'vault_locked') throw error;
+      notice(`账户池未回写：${error.message}`, 'warn');
+      return false;
+    }
+  };
+  if (loaded.needsEncrypt && saveOnLoad()) {
     notice(`账户池已升级为本地加密存储（${state.accounts.length} 个账户的令牌不再明文落盘）`, 'info');
   }
-  if (loaded.dirty || !fs.existsSync(file)) save();
+  if (loaded.dirty || !fs.existsSync(file)) saveOnLoad();
   const find = id => state.accounts.find(account => account.id === id) || null;
   // Runtime-only generations let asynchronous callers reject stale results, including a
   // same-token reauthorization or an account removed and recreated while awaiting I/O.
@@ -366,6 +420,8 @@ function createAccounts(dataDir, { onNotice = () => {}, vault = null } = {}) {
 
   const snapshot = (liveRefreshToken = null) => ({
     activeId: state.activeId,
+    startupId: state.startupId,
+    hasClientLogin: Boolean(liveRefreshToken),
     liveId: state.accounts.find(account => account.refreshToken === liveRefreshToken)?.id || null,
     items: state.accounts.map(account => publicView(account, liveRefreshToken))
   });
@@ -416,7 +472,10 @@ function createAccounts(dataDir, { onNotice = () => {}, vault = null } = {}) {
       };
       state.accounts.push(account);
     }
-    if (select || !state.activeId) state.activeId = account.id;
+    if ((select || !state.activeId) && state.activeId !== account.id) {
+      state.activeId = account.id;
+      state.startupId = null;
+    }
     reviseCredentials(account.id);
     save();
     return account;
@@ -426,13 +485,20 @@ function createAccounts(dataDir, { onNotice = () => {}, vault = null } = {}) {
     file,
     snapshot,
     active: () => find(state.activeId),
+    startup: () => find(state.startupId),
     all: () => [...state.accounts],
     find,
     credentialRevision: id => find(id) ? credentialRevisions.get(id) : null,
-    select: transact(id => {
+    select: transact((id, { startupId = id } = {}) => {
+      if (id === null) {
+        state.startupId = null;
+        save();
+        return snapshot();
+      }
       const account = find(id);
       if (!account) throw new Error('账户不存在');
       state.activeId = account.id;
+      state.startupId = startupId === account.id ? account.id : null;
       save();
       return snapshot();
     }),
@@ -530,6 +596,7 @@ function createAccounts(dataDir, { onNotice = () => {}, vault = null } = {}) {
       reviseCredentials(id);
       state.accounts = state.accounts.filter(item => item.id !== id);
       if (state.activeId === id) state.activeId = state.accounts[0]?.id || null;
+      if (state.startupId === id) state.startupId = null;
       save();
       return snapshot();
     })

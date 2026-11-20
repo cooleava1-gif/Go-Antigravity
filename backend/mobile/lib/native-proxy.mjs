@@ -104,15 +104,27 @@ function rewriteHtml(bytes, token) {
 function sendError(res, status) {
  if (res.destroyed || res.writableEnded) return;
  if (res.headersSent) { res.destroy(); return; }
- const body = Buffer.from(status === 401 ? 'Pocket authentication required' : status === 403 ? 'Forbidden' : 'Native frontend unavailable');
- res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', 'content-length': body.length, 'cache-control': 'no-store' });
+ if (status === 401 || status === 403) {
+  const plain = Buffer.from(status === 401 ? 'Pocket authentication required' : 'Forbidden');
+  res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', 'content-length': plain.length, 'cache-control': 'no-store' });
+  res.end(plain);
+  return;
+ }
+ // Native upstream failure: offer the compatibility entry instead of a dead end.
+ const body = Buffer.from('<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>原生界面暂不可用</title><style>html{color-scheme:dark;font:16px system-ui;background:#11151c;color:#eef2f8}body{max-width:25rem;margin:12vh auto;padding:24px}p{line-height:1.6;color:#b7c1d0}a{display:inline-block;margin-top:16px;padding:14px 20px;border-radius:10px;background:#b4d3ff;color:#12213b;text-decoration:none;font-weight:600}</style><main><h1>原生界面暂不可用</h1><p>桌面原生前端暂时无法连接。可以改用下方兼容入口继续访问手机功能。</p><a href="/mobile/">进入兼容入口</a></main></html>');
+ res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'content-length': body.length, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' });
  res.end(body);
 }
 
 function socketError(socket, status) {
  if (socket.destroyed || socket.writableEnded) return;
  const reason = status === 401 ? 'Unauthorized' : status === 403 ? 'Forbidden' : status === 503 ? 'Service Unavailable' : status === 504 ? 'Gateway Timeout' : 'Bad Gateway';
- socket.end('HTTP/1.1 ' + status + ' ' + reason + '\r\nConnection: close\r\nContent-Length: 0\r\nCache-Control: no-store\r\n\r\n');
+ if (status === 401 || status === 403) {
+  socket.end('HTTP/1.1 ' + status + ' ' + reason + '\r\nConnection: close\r\nContent-Length: 0\r\nCache-Control: no-store\r\n\r\n');
+  return;
+ }
+ const body = Buffer.from('<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>连接失败</title></head><body><p>桌面原生前端暂时无法连接。</p><p><a href="/mobile/">进入兼容入口</a></p></body></html>');
+ socket.end(Buffer.concat([Buffer.from('HTTP/1.1 ' + status + ' ' + reason + '\r\nConnection: close\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: ' + body.length + '\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\r\n'), body]));
 }
 
 function responseHead(res) {

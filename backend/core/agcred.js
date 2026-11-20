@@ -265,21 +265,106 @@ function createAgCred({ scriptPath, spawnProcess = spawn, execFileAsync = run, p
     await runScript('write', Buffer.from(payload, 'utf8').toString('base64'));
   }
 
+  // curl config uses backslash escapes inside double-quoted values. The loopback
+  // regression verifies quoted headers and bodies/forms with newlines and Unicode.
+  function curlConfigQuote(value) {
+    return '"' + String(value)
+      .replace(/\\/g, '\\\\')
+      .replace(/"/g, '\\"')
+      .replace(/\r/g, '\\r')
+      .replace(/\n/g, '\\n')
+      .replace(/\t/g, '\\t')
+      .replace(/\v/g, '\\v') + '"';
+  }
+
+  // Everything secret rides in here; argv keeps only routing, method and the URL.
+  // The header is quoted as one value ("Name: value") so the whole line survives curl's
+  // config parser; escaping happens inside curlConfigQuote.
+  function buildCurlConfig({ form, body, headers }) {
+    const lines = [];
+    for (const [key, value] of Object.entries(headers)) {
+      lines.push('header: ' + curlConfigQuote(`${key}: ${value}`));
+    }
+    if (form) {
+      // Same percent-encoding --data-urlencode would apply, expressed as a config data line.
+      const encoded = Object.entries(form)
+        .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value == null ? '' : String(value))}`)
+        .join('&');
+      lines.push('data = ' + curlConfigQuote(encoded));
+    } else if (body !== undefined) {
+      const raw = typeof body === 'string' ? body : JSON.stringify(body);
+      lines.push('data-binary = ' + curlConfigQuote(raw));
+    }
+    return lines.join('\n') + (lines.length ? '\n' : '');
+  }
+
+  // Runs curl with the config on stdin. Resolves with stdout, rejects with an error shaped
+  // like execFile's (numeric exit code + stderr) so describeNetworkFailure keeps working.
+  function runCurl(args, configInput) {
+    return new Promise((resolve, reject) => {
+      let child;
+      try {
+        child = spawnProcess('curl.exe', args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+      } catch (error) { reject(error); return; }
+      let stdout = '';
+      let stderr = '';
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        try { child.kill(); } catch { /* already gone */ }
+        const error = new Error('curl timed out');
+        error.code = 28;
+        error.stderr = stderr;
+        reject(error);
+      }, 30000);
+      const finish = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        fn(value);
+      };
+      child.stdout?.setEncoding('utf8');
+      child.stderr?.setEncoding('utf8');
+      child.stdout?.on('data', chunk => { stdout += chunk; });
+      child.stderr?.on('data', chunk => { stderr += chunk; });
+      child.once('error', error => {
+        // execFile reports a missing binary as ENOENT; mirror that so the fetch fallback and
+        // the "curl missing" fail-closed branch still trigger.
+        finish(reject, error);
+      });
+      child.once('close', code => {
+        if (code === 0) finish(resolve, stdout);
+        else {
+          const error = new Error(`curl exited with ${code}`);
+          error.code = typeof code === 'number' ? code : 'ERR_CURL';
+          error.stderr = stderr;
+          finish(reject, error);
+        }
+      });
+      // stdin carries the config; end() closes it so curl sees a complete file.
+      if (child.stdin) {
+        child.stdin.on('error', () => { /* curl may exit before we finish writing */ });
+        child.stdin.end(configInput);
+      }
+    });
+  }
+
   async function http(request) {
     const { url, method = 'GET', form, body, headers = {}, proxyPort } = request;
     const args = ['-s', '--http1.1', '--max-time', '25', '-X', method];
     // An explicit route must override inherited NO_PROXY (including a blanket '*').
     if (proxyPort) args.push('--proxy', `http://127.0.0.1:${proxyPort}`, '--noproxy', '');
-    for (const [key, value] of Object.entries(headers)) args.push('-H', `${key}: ${value}`);
-    if (form) {
-      for (const [key, value] of Object.entries(form)) args.push('--data-urlencode', `${key}=${value}`);
-    } else if (body !== undefined) {
-      args.push('-d', typeof body === 'string' ? body : JSON.stringify(body));
-    }
+    // Headers and the body may carry the OAuth client secret, the account's refresh token and
+    // the Bearer access token, so they never appear in argv: on Windows any same-user process
+    // can read a child's full command line (WMI Win32_Process.CommandLine, ETW). They are
+    // written to curl's config on stdin instead, and --config - makes curl read it from there.
+    // --config is processed before the rest of argv, so -X / URL / --proxy stay on the command
+    // line and the existing routing tests keep passing unchanged.
+    args.push('--config', '-');
     args.push(url);
     try {
-      const { stdout } = await execFileAsync('curl.exe', args, { windowsHide: true, timeout: 30000 });
-      return stdout;
+      return await runCurl(args, buildCurlConfig({ form, body, headers }));
     } catch (error) {
       if (error.code === 'ENOENT') {
         // Native fetch does not implement our explicit HTTP proxy contract. Fail closed
@@ -300,7 +385,9 @@ function createAgCred({ scriptPath, spawnProcess = spawn, execFileAsync = run, p
         }
       }
       // Never rethrow the raw execFile error: its message *is* the command line, and our command
-      // lines carry the client secret, the refresh token and the Bearer access token.
+      // lines used to carry the client secret, the refresh token and the Bearer access token.
+      // argv is clean now, but the message can still echo stderr (which may contain the body),
+      // so describeNetworkFailure redacts it on the way out.
       throw tokenError('network_error', describeNetworkFailure({ error, proxyPort, url }));
     }
   }

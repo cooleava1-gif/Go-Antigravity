@@ -11,6 +11,18 @@ import { validateTunnelToken } from '../core/mobile-secrets.js';
 
 export const LOCAL_URL = 'http://127.0.0.1:3082/';
 export const METRICS_URL = 'http://127.0.0.1:20382/ready';
+// Reserve one ephemeral loopback port so the connector's metrics endpoint never collides with a fixed port.
+async function reservePortImpl() {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once('error', reject);
+    server.listen({ host: '127.0.0.1', port: 0, exclusive: true }, () => {
+      const { port } = server.address();
+      server.close(error => error ? reject(error) : resolve(port));
+    });
+  });
+}
+export { reservePortImpl as reservePort };
 const runtimeDir = dirname(fileURLToPath(import.meta.url));
 const repository = resolve(runtimeDir, '../..');
 const safeErrors = new Set(['CLOUDFLARED_NOT_FOUND', 'FIXED_CONFIG_REQUIRED', 'TUNNEL_START_FAILED', 'TUNNEL_PUBLIC_PENDING', 'TUNNEL_RECOVERY_EXHAUSTED']);
@@ -49,7 +61,9 @@ export async function validateExternalConfig(path, root = repository) {
   } catch { throw fail('FIXED_CONFIG_REQUIRED'); }
 }
 export function buildCloudflaredArgs(options) {
-  const common = ['--metrics', '127.0.0.1:20382', '--no-autoupdate', '--protocol', options.protocol || 'http2'];
+  const metricsPort = Number.isSafeInteger(options.metricsPort) && options.metricsPort > 0 && options.metricsPort <= 65535
+    ? options.metricsPort : 20382;
+  const common = ['--metrics', '127.0.0.1:' + metricsPort, '--no-autoupdate', '--protocol', options.protocol || 'http2'];
   // cloudflared tunnel-level flags must precede the named tunnel's run subcommand.
   return options.mode === 'fixed'
     ? ['tunnel', '--config', options.config || join(runtimeDir, 'quick-config.yml'), ...common, 'run']
@@ -99,10 +113,10 @@ export function quickUrlFromLine(line) {
   for (const match of line.matchAll(/(?:^|[\s|])(https:\/\/[^\s|"'<>]+)/g)) { const url = parseQuickUrl(match[1]); if (url) return url; }
   return null;
 }
-async function assertPortsFree() {
+async function assertPortsFree(metricsPort) {
   const held = [];
   try {
-    for (const port of [3082, 20382]) {
+    for (const port of [3082, metricsPort]) {
       const server = createServer(); held.push(server);
       await new Promise((resolve, reject) => { server.once('error', reject); server.listen({ host: '127.0.0.1', port, exclusive: true }, resolve); });
     }
@@ -141,22 +155,22 @@ function directProbe(url, { signal, requestImpl, metrics = false, timeoutMs }) {
     } catch { finish(false); }
   });
 }
-export function metricsReady({ signal, requestImpl = httpRequest } = {}) {
-  return directProbe(METRICS_URL, { signal, requestImpl, metrics: true, timeoutMs: 1500 });
+export function metricsReady(url = METRICS_URL, { signal, requestImpl = httpRequest } = {}) {
+  return directProbe(url, { signal, requestImpl, metrics: true, timeoutMs: 1500 });
 }
 export function publicReady(url, { signal, requestImpl = httpsRequest, timeoutMs = 6000 } = {}) {
   return directProbe(url, { signal, requestImpl, timeoutMs });
 }
 export function createTunnelSupervisor({
   env = process.env, spawnChild = spawn, resolveBinary = findCloudflared,
-  checkConfig = validateExternalConfig, checkPorts = assertPortsFree,
+  checkConfig = validateExternalConfig, checkPorts = assertPortsFree, reservePort = reservePortImpl,
   probeReady = metricsReady, probePublic = publicReady, emit = value => console.log(JSON.stringify(value)),
   serverTimeout = 30000, tunnelTimeout = 90000, pollMs = 300, killGrace = 1200,
   fallbackMs = 8000, healthMs = 5000, failureLimit = 3, maxRestarts = 2,
   retryMs = 1000, resetAfter = 600000, probeTimeout = 1500, publicProbeTimeout = 6000,
   now = Date.now,
 } = {}) {
-  let server, attempt, stopped = false, ready = false, serverReady = false, starting = false, options, binary;
+  let server, attempt, stopped = false, ready = false, serverReady = false, starting = false, options, binary, metricsPort;
   let timeout, retryTimer, retryResolve, restarting = null, restarts = 0, startupFallback = false;
   let startResolve, startReject, doneResolve;
   const children = new Set(), kills = new WeakMap();
@@ -224,7 +238,7 @@ export function createTunnelSupervisor({
     clearTimeout(item.pollTimer); item.busy = true; item.recheck = false;
     let delay = item.ready ? healthMs : pollMs;
     try {
-      const edge = await bounded(probeReady, [], item.controller.signal, probeTimeout);
+      const edge = await bounded(probeReady, [item.metricsUrl], item.controller.signal, probeTimeout);
       if (!active(item)) return;
       item.edgeReady = edge;
       if (!edge) {
@@ -241,7 +255,7 @@ export function createTunnelSupervisor({
           if (!active(item)) return;
           if (reachable && children.has(server) && children.has(item.child)) {
             item.ready = true; item.healthySince = now(); clearTimeout(timeout); clearTimeout(item.fallbackTimer);
-            const status = { tunnelReady: true, mode: options.mode, publicUrl: item.publicUrl, local: LOCAL_URL };
+            const status = { tunnelReady: true, mode: options.mode, publicUrl: item.publicUrl, local: LOCAL_URL, metricsPort: item.metricsPort };
             ready = true; emit(status); startResolve(status); delay = healthMs;
           } else delay = Math.max(pollMs, retryMs);
         }
@@ -249,13 +263,23 @@ export function createTunnelSupervisor({
     } catch {} finally { item.busy = false; }
     if (active(item)) item.pollTimer = setTimeout(() => { void checkReady(item); }, item.recheck ? 0 : delay);
   }
-  function launchTunnel(protocol) {
+  async function launchTunnel(protocol) {
     if (stopped) return;
+    // Each connector attempt gets its own ephemeral metrics port so health probes always target
+    // the endpoint this attempt actually started, never a port another service may hold.
+    // The supervisor-level value is the port checkPorts validated before the first launch; after
+    // that first launch it is consumed, so every restart reserves a fresh port.
+    let port;
+    try { port = metricsPort ?? await reservePort(); }
+    catch { void stop(1, 'TUNNEL_START_FAILED'); return; } // A port-allocation system error is not retried; restart would no-op on an invalidated attempt.
+    if (stopped) return; // A stop raced the async port reservation; never spawn after stop.
+    metricsPort = null;
     const item = { controller: new AbortController(), protocol, publicUrl: options.publicUrl,
+      metricsPort: port, metricsUrl: 'http://127.0.0.1:' + port + '/ready',
       ready: false, busy: false, edgeReady: false, failures: 0, healthySince: null };
     attempt = item; phase('connector');
     try {
-      item.child = bind(spawnChild(binary, buildCloudflaredArgs({ ...options, protocol }), {
+      item.child = bind(spawnChild(binary, buildCloudflaredArgs({ ...options, protocol, metricsPort: port }), {
         cwd: runtimeDir, env: { ...cloudflaredEnvironment(originEnvironment(env), options.mode),
           ...(options.auth === 'token' ? { TUNNEL_TOKEN: env.TUNNEL_TOKEN } : {}) }, windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'], shell: false,
@@ -294,7 +318,7 @@ export function createTunnelSupervisor({
       retryResolve = null; clearTimeout(retryTimer);
       // Release the lock before spawn so synchronous replacement failures are not dropped.
       if (restarting === work) restarting = null;
-      if (!stopped) launchTunnel(item.protocol === 'http2' ? 'quic' : 'http2');
+      if (!stopped) void launchTunnel(item.protocol === 'http2' ? 'quic' : 'http2');
     })();
     restarting = work;
     try { await work; } finally { if (restarting === work) restarting = null; }
@@ -304,7 +328,7 @@ export function createTunnelSupervisor({
     timeout = setTimeout(() => { void stop(1, attempt?.edgeReady ? 'TUNNEL_PUBLIC_PENDING' : 'TUNNEL_START_FAILED'); }, tunnelTimeout);
     try {
       binary = await resolveBinary(env);
-      if (!stopped) launchTunnel('http2');
+      if (!stopped) void launchTunnel('http2');
     } catch (error) { void stop(1, error.code === 'CLOUDFLARED_NOT_FOUND' ? error.code : 'TUNNEL_START_FAILED'); }
   }
   async function start() {
@@ -315,7 +339,8 @@ export function createTunnelSupervisor({
       options = parseRuntimeOptions(env); phase('origin');
       if (options.config) options.config = await checkConfig(options.config);
       if (stopped) return started;
-      await checkPorts(); if (stopped) return started;
+      metricsPort = await reservePort();
+      await checkPorts(metricsPort); if (stopped) return started;
       server = bind(spawnChild(process.execPath, [join(runtimeDir, 'server.mjs')], { cwd: runtimeDir, env: originEnvironment(env), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], shell: false }));
       const reader = createLineReader(line => {
         if (serverReady || stopped) return;

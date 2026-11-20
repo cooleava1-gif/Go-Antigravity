@@ -1,5 +1,6 @@
 # Local tool audit journals (may contain machine-specific paths)
 .dsh-ops/
+/docs/audit-2026-11-20/
 
 # Go-Antigravity runtime data is never part of the source release.
 /.go-antigravity-data/

@@ -170,8 +170,7 @@ function createApi(app) {
       }
       if (method === 'POST' && route === '/api/kernel/apply') {
         const data = await readBody(request);
-        // The patch rewrites a signed Google binary, so it is a POST that spells out both axes
-        // rather than something a stray GET could trigger.
+        // Keep kernel changes behind POST and forward only the two supported setting keys.
         const kernelInput = {
           promptTier: data?.promptTier,
           contextMode: data?.contextMode

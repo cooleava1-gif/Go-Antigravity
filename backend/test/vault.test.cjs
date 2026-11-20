@@ -52,14 +52,20 @@ test('密文被篡改时拒绝解密，而不是返回垃圾', async () => {
   assert.throws(() => vault.open(PREFIX + bytes.toString('base64')), error => error.code === 'vault_corrupt');
 });
 
-test('没有主密钥时明文原样通过，但已有密文会明确拒绝', async () => {
+test('普通模式下没有主密钥时拒绝明文出口，已有密文会明确拒绝', async () => {
   const failing = createVault({
     readKey: async () => { throw new Error('凭据管理器不可用'); },
     writeKey: async () => {}
   });
   assert.equal(await failing.unlock(), false);
   assert.equal(failing.sealEnabled(), false);
-  assert.equal(failing.seal('plain-token'), 'plain-token', '不能假装加密了');
+  assert.equal(failing.plaintextAllowed(), false, '普通模式不开放明文排障通道');
+  assert.throws(() => failing.seal('plain-token'), error => {
+    assert.equal(error.code, 'vault_locked');
+    assert.match(error.message, /凭据管理器不可用/);
+    assert.match(error.message, /明文/);
+    return true;
+  });
   assert.equal(failing.open('plain-token'), 'plain-token');
 
   const sealedElsewhere = (() => {
@@ -80,8 +86,34 @@ test('强制明文模式只关闭加密写入，仍能读取既有密文', async
   const reader = createVault({ readKey: store.readKey, writeKey: store.writeKey, plaintext: true });
   await reader.unlock();
   assert.equal(reader.sealEnabled(), false);
+  assert.equal(reader.plaintextAllowed(), true, '显式排障授权必须能被上层识别');
   assert.equal(reader.seal('new-token'), 'new-token');
   assert.equal(reader.open(sealed), 'keep-me');
+});
+
+test('显式明文排障是唯一允许明文落盘的通道，不影响凭据可用性判断', async () => {
+  const explicit = createVault({
+    readKey: async () => { throw new Error('凭据管理器不可用'); },
+    writeKey: async () => {},
+    plaintext: true
+  });
+  assert.equal(await explicit.unlock(), false);
+  assert.equal(explicit.seal('plain-token'), 'plain-token');
+  // 没有主密钥时 sealEnabled 仍为 false：mobile-secrets 之类的安全判断继续失败关闭。
+  assert.equal(explicit.sealEnabled(), false);
+  assert.equal(explicit.plaintextAllowed(), true);
+  assert.equal(explicit.open('plain-token'), 'plain-token');
+});
+
+test('默认 vault 不开放明文通道', async () => {
+  const store = fakeStore();
+  const vault = createVault({ readKey: store.readKey, writeKey: store.writeKey });
+  await vault.unlock();
+  assert.equal(vault.sealEnabled(), true);
+  assert.equal(vault.plaintextAllowed(), false);
+  const sealed = vault.seal('strict-token');
+  assert.equal(isEncrypted(sealed), true);
+  assert.equal(vault.seal(sealed), sealed, '已加密的值不会被二次加密');
 });
 
 test('密钥长度异常的凭据不会被覆盖', async () => {

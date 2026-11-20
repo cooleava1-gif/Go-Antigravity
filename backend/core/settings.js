@@ -1,16 +1,14 @@
 const fs = require('node:fs');
 const { readJson, writeJson } = require('./storage');
-const { normalizePromptTier, normalizeContextMode } = require('../features/kernel-patch');
+const { normalizePromptTier, normalizeContextMode, payloads } = require('../features/kernel-patch');
 
 const DEFAULTS = Object.freeze({
   port: 7890,
   enableI18n: true,
   enableContextMonitor: true,
-  // New installs use compact v2 core guidance and a 512K local ceiling. Existing files
-  // without a payload version remain v1 preferences until an explicit prompt application.
-  promptTier: '3',
-  promptPayloadVersion: 2,
-  contextMode: '512k',
+  promptTier: 'stock',
+  promptPayloadVersion: payloads.version,
+  contextMode: '256k',
   autoApplyKernelPatch: true,
   // Verified before every launch: a dead or misrouted proxy is what AG reports as an opaque
   // "HTTP 400 / User location is not supported" dialog, so the launcher checks the exit itself.
@@ -58,7 +56,7 @@ function normalizeSettings(input = {}, previous = DEFAULTS) {
     }
   }
   if (input.promptPayloadVersion !== undefined) {
-    if (![1, 2].includes(input.promptPayloadVersion)) throw new Error("promptPayloadVersion 取值不受支持");
+    if (![1, 2, payloads.version].includes(input.promptPayloadVersion)) throw new Error('promptPayloadVersion 取值不受支持');
     result.promptPayloadVersion = input.promptPayloadVersion;
   }
   // customSystemPrompt / customPromptUpdatedAt disappeared with the custom prompt tier. They are
@@ -72,10 +70,16 @@ function normalizeSettings(input = {}, previous = DEFAULTS) {
   return result;
 }
 
-function createSettings(file) {
+function createSettings(file, { log = () => {} } = {}) {
   let value;
-  const defaults = { ...DEFAULTS, promptPayloadVersion: fs.existsSync(file) ? 1 : 2 };
-  try { value = normalizeSettings(readJson(file, {}), defaults); } catch { value = defaults; }
+  // Unversioned saved prompts cannot opt into a newer payload on launch.
+  const defaults = fs.existsSync(file) ? { ...DEFAULTS, promptPayloadVersion: 1 } : DEFAULTS;
+  try {
+    value = normalizeSettings(readJson(file), defaults);
+  } catch (error) {
+    value = defaults;
+    if (error.code !== 'ENOENT') log('设置文件无法读取或内容无效，已使用默认设置；请检查代理端口和启动选项。', 'tag-alert');
+  }
   return {
     get: () => ({ ...value }),
     update(input) {

@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { createHash } = require('node:crypto');
+const { spawn } = require('node:child_process');
 const {
   createAgCred,
   buildCredentialPayload,
@@ -107,9 +108,9 @@ test('同一 refresh_token 的并发刷新只发一次请求', async () => {
     scriptPath: 'unused.ps1',
     platform: 'linux',
     oauthClientLoader: async () => [{ id: SYNTH_REFRESH_ID, secret: 'fake-refresh-secret' }],
-    execFileAsync: async () => {
+    spawnProcess: () => {
       calls += 1;
-      return { stdout: JSON.stringify({ access_token: 'at-fresh', expires_in: 3600 }) };
+      return fakeCurlChild([], { stdout: JSON.stringify({ access_token: 'at-fresh', expires_in: 3600 }) });
     }
   });
 
@@ -134,9 +135,9 @@ test('刷新失败的并发请求共享同一个错误，且不会残留锁', as
     scriptPath: 'unused.ps1',
     platform: 'linux',
     oauthClientLoader: async () => [{ id: SYNTH_REFRESH_ID, secret: 'fake-refresh-secret' }],
-    execFileAsync: async () => {
+    spawnProcess: () => {
       calls += 1;
-      return { stdout: JSON.stringify({ error: 'invalid_grant' }) };
+      return fakeCurlChild([], { stdout: JSON.stringify({ error: 'invalid_grant' }) });
     }
   });
 
@@ -157,7 +158,7 @@ test('invalid_grant 归类为不可重试的永久错误', async () => {
     scriptPath: 'unused.ps1',
     platform: 'linux',
     oauthClientLoader: async () => [{ id: SYNTH_REFRESH_ID, secret: 'fake-refresh-secret' }],
-    execFileAsync: async () => ({
+    spawnProcess: () => fakeCurlChild([], {
       stdout: JSON.stringify({ error: 'invalid_grant', error_description: 'Token has been expired or revoked.' })
     })
   });
@@ -182,7 +183,7 @@ test('代理不可达时不再把整条 curl 命令（含密钥）抛给上层',
     scriptPath: 'unused.ps1',
     platform: 'linux',
     oauthClientLoader: async () => [{ id: SYNTH_REFRESH_ID, secret: 'fake-refresh-secret' }],
-    execFileAsync: async () => { throw curlError; }
+    spawnProcess: () => { throw curlError; }
   });
 
   await assert.rejects(() => cred.refreshAccessToken('rt', 7897), error => {
@@ -201,7 +202,7 @@ test('非 JSON 的网关错误不会被误判为永久失效', async () => {
     scriptPath: 'unused.ps1',
     platform: 'linux',
     oauthClientLoader: async () => [{ id: SYNTH_REFRESH_ID, secret: 'fake-refresh-secret' }],
-    execFileAsync: async () => ({ stdout: '<html>502 Bad Gateway</html>' })
+    spawnProcess: () => fakeCurlChild([], { stdout: '<html>502 Bad Gateway</html>' })
   });
 
   await assert.rejects(() => cred.refreshAccessToken('rt-busy', 7890), error => {
@@ -216,7 +217,7 @@ test('配置代理但缺少 curl 时明确失败，不用 fetch 发送任何凭�
   t.mock.method(globalThis, 'fetch', async () => { fetchCalls += 1; throw new Error('unexpected direct request'); });
   const cred = createAgCred({
     scriptPath: 'unused.ps1', platform: 'linux', oauthClientLoader: async () => [],
-    execFileAsync: async () => { throw Object.assign(new Error('synthetic secret in curl command'), { code: 'ENOENT' }); }
+    spawnProcess: () => { throw Object.assign(new Error('synthetic secret in curl command'), { code: 'ENOENT' }); }
   });
   for (const request of [
     { method: 'POST', form: { refresh_token: 'synthetic-refresh', client_secret: 'synthetic-secret' } },
@@ -240,7 +241,7 @@ test('未配置代理且缺少 curl 时保留有超时的 fetch 回退和请求�
   const seen = [];
   t.mock.method(globalThis, 'fetch', async (url, options) => { seen.push({ url, options }); return { text: async () => 'synthetic response' }; });
   const cred = createAgCred({ scriptPath: 'unused.ps1', oauthClientLoader: async () => [],
-    execFileAsync: async () => { throw Object.assign(new Error('curl missing'), { code: 'ENOENT' }); } });
+    spawnProcess: () => { throw Object.assign(new Error('curl missing'), { code: 'ENOENT' }); } });
   assert.equal(await cred.http({ url: 'https://upstream.fixture.invalid/token', method: 'POST', form: { code: 'synthetic code' } }), 'synthetic response');
   assert.equal(seen[0].options.body, 'code=synthetic+code');
   assert.equal(seen[0].options.headers['Content-Type'], 'application/x-www-form-urlencoded');
@@ -253,7 +254,7 @@ test('未配置代理且缺少 curl 时保留有超时的 fetch 回退和请求�
 test('无代理 fetch 回退读取响应体失败时仍返回脱敏网络错误', async t => {
   t.mock.method(globalThis, 'fetch', async () => ({ text: async () => { throw new Error('refresh_token=synthetic-sensitive-value'); } }));
   const cred = createAgCred({ scriptPath: 'unused.ps1', oauthClientLoader: async () => [],
-    execFileAsync: async () => { throw Object.assign(new Error('curl missing'), { code: 'ENOENT' }); } });
+    spawnProcess: () => { throw Object.assign(new Error('curl missing'), { code: 'ENOENT' }); } });
   await assert.rejects(cred.http({ url: 'https://upstream.fixture.invalid/token' }), error => {
     assert.equal(error.code, 'network_error');
     assert.doesNotMatch(error.message, /synthetic-sensitive-value/);
@@ -264,7 +265,7 @@ test('无代理 fetch 回退读取响应体失败时仍返回脱敏网络错误'
 test('显式代理禁用继承的 NO_PROXY，无代理请求不改变 curl 默认路由', async () => {
   const calls = [];
   const cred = createAgCred({ scriptPath: 'unused.ps1', oauthClientLoader: async () => [],
-    execFileAsync: async (command, args) => { calls.push({ command, args }); return { stdout: '{}' }; } });
+    spawnProcess: (command, args) => { calls.push({ command, args }); return fakeCurlChild([]); } });
   await cred.http({ url: 'https://upstream.fixture.invalid/', proxyPort: 7897 });
   assert.equal(calls[0].command, 'curl.exe');
   assert.equal(calls[0].args[calls[0].args.indexOf('--proxy') + 1], 'http://127.0.0.1:7897');
@@ -305,9 +306,9 @@ test('ensureFresh 在令牌仍然新鲜时不再请求网络', async () => {
     scriptPath: 'unused.ps1',
     platform: 'linux',
     oauthClientLoader: async () => [{ id: SYNTH_REFRESH_ID, secret: 'fake-refresh-secret' }],
-    execFileAsync: async () => {
+    spawnProcess: () => {
       calls += 1;
-      return { stdout: JSON.stringify({ access_token: 'at-fresh', expires_in: 3600 }) };
+      return fakeCurlChild([], { stdout: JSON.stringify({ access_token: 'at-fresh', expires_in: 3600 }) });
     }
   });
 
@@ -330,7 +331,14 @@ test('ensureFresh await 期间账户被换令牌时仍只返回原请求的 refr
   const cred = createAgCred({
     scriptPath: 'unused.ps1', platform: 'linux',
     oauthClientLoader: async () => [{ id: SYNTH_REFRESH_ID, secret: 'fake-refresh-secret' }],
-    execFileAsync: async (command, args) => { sentToken = args.find(value => value.startsWith('refresh_token=')); entered(); await paused; return { stdout: JSON.stringify({ access_token: 'synthetic-original-access', expires_in: 3600 }) }; }
+    spawnProcess: () => {
+      // The refresh token travels on stdin now, not argv - capture it from the config, then
+      // hold the child open until the test swaps the account mid-flight.
+      const child = fakeCurlChild([], { stdout: JSON.stringify({ access_token: 'synthetic-original-access', expires_in: 3600 }), beforeReply: paused });
+      const realEnd = child.stdin.end.bind(child.stdin);
+      child.stdin.end = chunk => { sentToken = String(chunk); realEnd(chunk); entered(); };
+      return child;
+    }
   });
   const work = cred.ensureFresh(account, 7890);
   await ready;
@@ -338,8 +346,238 @@ test('ensureFresh await 期间账户被换令牌时仍只返回原请求的 refr
   account.accessToken = 'synthetic-later-access';
   release();
   const result = await work;
-  assert.equal(sentToken, 'refresh_token=synthetic-original-refresh');
+  // The token moved off argv onto stdin config - assert it is there and not the swapped one.
+  assert.match(sentToken, /refresh_token=synthetic-original-refresh/, 'refresh_token 应经 stdin 配置传输');
+  assert.doesNotMatch(sentToken, /synthetic-later-refresh/, '应发送的是原请求的 refresh');
   assert.equal(result.refreshToken, 'synthetic-original-refresh');
   assert.equal(result.accessToken, 'synthetic-original-access');
   assert.equal(account.refreshToken, 'synthetic-later-refresh');
+});
+
+// A fake curl child: captures argv and the stdin config exactly as written, then resolves.
+// Mimics the shape runCurl consumes - stdout/stderr EventEmitter pipes plus stdin.end().
+function fakeCurlChild(seen, { stdout = '{}', code = 0, beforeReply } = {}) {
+  const { EventEmitter } = require('node:events');
+  const child = new EventEmitter();
+  const { PassThrough } = require('node:stream');
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.stdin = { on() {}, end(chunk) { child.__stdin = chunk; } };
+  child.kill = () => {};
+  queueMicrotask(async () => {
+    if (beforeReply) await beforeReply;
+    seen.push({ args: child.__args, stdin: child.__stdin });
+    if (code === 0) { child.stdout.end(Buffer.from(stdout)); child.emit('close', 0); }
+    else { child.stderr.end(Buffer.from('synthetic curl stderr')); child.emit('close', code); }
+  });
+  return child;
+}
+
+test('curl 输出在 UTF-8 字符中间分块时仍完整解码', async () => {
+  const { EventEmitter } = require('node:events');
+  const { PassThrough } = require('node:stream');
+  const expected = JSON.stringify({ message: '中文 ✓' });
+  const bytes = Buffer.from(expected);
+  const split = bytes.indexOf(Buffer.from('中')) + 1;
+  const cred = createAgCred({
+    scriptPath: 'unused.ps1', platform: 'win32', oauthClientLoader: async () => [],
+    spawnProcess: () => {
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.stdin = { on() {}, end() {
+        queueMicrotask(() => {
+          child.stdout.write(bytes.subarray(0, split));
+          child.stdout.end(bytes.subarray(split));
+          child.emit('close', 0);
+        });
+      } };
+      return child;
+    }
+  });
+  assert.equal(await cred.http({ url: 'https://upstream.fixture.invalid/text' }), expected);
+});
+
+function spawnStub(seen, options) {
+  return (command, args) => {
+    const child = fakeCurlChild(seen, options);
+    child.__args = args;
+    return child;
+  };
+}
+
+// F1: secrets must never appear in curl's argv. They ride in on stdin as a curl config file
+// read via "--config -", so only routing, method and the URL reach the command line.
+test('curl argv 不含任何秘密，秘密改由 stdin 配置传入', async () => {
+  const seen = [];
+  const cred = createAgCred({
+    scriptPath: 'unused.ps1',
+    platform: 'linux',
+    spawnProcess: spawnStub(seen, { stdout: JSON.stringify({ access_token: 'at-stdin', expires_in: 3600 }) }),
+    oauthClientLoader: async () => [{ id: SYNTH_REFRESH_ID, secret: SYNTH_REFRESH_SECRET }]
+  });
+
+  await cred.refreshAccessToken('1//syntheticRefreshTokenValue000000', 7897);
+  const call = seen[0];
+  // argv carries only routing/URL switches - no secrets
+  const argvText = call.args.join(' ');
+  assert.doesNotMatch(argvText, /client_secret/i);
+  assert.doesNotMatch(argvText, /refresh_token/i);
+  assert.doesNotMatch(argvText, /GOCSPX-/);
+  assert.doesNotMatch(argvText, /1\/\//);
+  assert.doesNotMatch(argvText, /Bearer/i);
+  // and the body/header material is on stdin, not argv
+  assert.ok(typeof call.stdin === 'string' && call.stdin.length > 0, '应通过 stdin 传入配置');
+  assert.match(call.stdin, /data = "/);
+  assert.match(call.stdin, /client_secret=/);
+  assert.match(call.stdin, /refresh_token=/);
+  // argv still carries the routing the existing tests depend on, plus the stdin config switch
+  assert.ok(call.args.includes('--config'));
+  assert.equal(call.args[call.args.indexOf('--config') + 1], '-');
+  assert.ok(call.args.includes('-X'));
+  assert.equal(call.args[call.args.length - 1], 'https://oauth2.googleapis.com/token', 'URL 保留在 argv 末尾');
+});
+
+test('curl stdin 配置是合法 curl config：header 行 + data 行均正确转义', async () => {
+  const seen = [];
+  const cred = createAgCred({
+    scriptPath: 'unused.ps1',
+    platform: 'linux',
+    spawnProcess: spawnStub(seen),
+    oauthClientLoader: async () => []
+  });
+
+  // form 请求：header 行 + data 行，值经 curl 双引号转义
+  await cred.http({
+    url: 'https://upstream.fixture.invalid/token',
+    method: 'POST',
+    headers: { Authorization: 'Bearer synthetic-access-token-value' },
+    form: { client_secret: 'synthetic-secret-value', grant_type: 'refresh_token' }
+  });
+  const formCall = seen[0];
+  // Whole line quoted: curl's config parser stops at the first " inside a quoted value, so
+  // "Name: value" must be one quoted token rather than "Name: "value"".
+  assert.match(formCall.stdin, /^header: "Authorization: Bearer synthetic-access-token-value"\n/);
+  assert.match(formCall.stdin, /\ndata = "client_secret=synthetic-secret-value&grant_type=refresh_token"\n$/);
+  assert.equal(formCall.args.includes('--data-urlencode'), false, 'argv 不再有 --data-urlencode');
+  assert.equal(formCall.args.includes('-H'), false, 'argv 不再有 -H');
+
+  // body 请求：原始 JSON 经转义放进 data-binary
+  await cred.http({
+    url: 'https://upstream.fixture.invalid/quota',
+    method: 'POST',
+    body: { sample: true }
+  });
+  const bodyCall = seen[1];
+  // curl config escaping turns " into \" inside the quoted value
+  assert.match(bodyCall.stdin, /^(?:\n)?data-binary = "\{\\"sample\\":true\}"\n$/);
+  assert.equal(bodyCall.args.includes('-d'), false, 'argv 不再有 -d');
+});
+
+// Quotes, backslashes, newlines and non-ASCII must survive curl's config parser intact,
+// using curl's documented backslash escapes (\, ", \n, \r, \t, \v).
+test('curl config 对引号/反斜线/换行/非ASCII 做了正确转义', async () => {
+  const seen = [];
+  const cred = createAgCred({
+    scriptPath: 'unused.ps1', platform: 'linux',
+    spawnProcess: spawnStub(seen), oauthClientLoader: async () => []
+  });
+
+  const tricky = 'a"b\\c\nd非ASCII✓';
+  await cred.http({
+    url: 'https://upstream.fixture.invalid/x', method: 'POST',
+    headers: { 'X-Tricky': tricky },
+    body: { note: tricky }
+  });
+  const stdin = seen[0].stdin;
+  // Standard curl config escapes: backslash -> \\, quote -> \", newline -> \n.
+  assert.ok(stdin.includes('header: "X-Tricky: a\\"b\\\\c\\nd非ASCII✓"'),
+    'header 值应按 curl 规则转义: ' + JSON.stringify(stdin));
+  const expectedBody = 'data-binary = "' + '{\"note\":\"a\\\"b\\\\c\\nd非ASCII✓\"}'.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n') + '"';
+  assert.ok(stdin.includes(expectedBody), 'body 应按 curl 规则转义: ' + JSON.stringify(stdin));
+  assert.ok(stdin.includes('非ASCII✓'), '非 ASCII 应原样保留');
+  // argv still clean
+  assert.doesNotMatch(seen[0].args.join(' '), /非ASCII|sample|client_secret/);
+});
+
+// F1 isolation test: drive the REAL curl.exe against a loopback-only HTTP server so the
+// stdin config syntax is proven end to end - not just that "stdin has a value". Exercises
+// quotes, backslashes, newlines, non-ASCII, form encoding and header fidelity. No public
+// network and no real tokens: everything stays on 127.0.0.1 with synthetic values.
+test('真实 curl.exe 经 stdin 配置正确传输引号/反斜线/换行/非ASCII/body/form/header', { skip: process.platform !== 'win32' }, async t => {
+  const http = require('node:http');
+  const path = require('node:path');
+  const { execFile } = require('node:child_process');
+  const { promisify } = require('node:util');
+  const run = promisify(execFile);
+  const curl = path.join(process.env.SystemRoot || 'C:/Windows', 'System32', 'curl.exe');
+  try { await run(curl, ['-q', '--version'], { windowsHide: true, timeout: 3000 }); }
+  catch (error) { if (error.code === 'ENOENT') return t.skip('Windows curl.exe unavailable'); throw error; }
+
+  const received = [];
+  const server = http.createServer((request, response) => {
+    let raw = '';
+    request.on('data', chunk => { raw += chunk; });
+    request.on('end', () => {
+      received.push({
+        method: request.method,
+        url: request.url,
+        headers: request.headers,
+        raw,
+        body: (() => { const ct = request.headers['content-type'] || ''; if (ct.includes('application/x-www-form-urlencoded')) { const out = {}; for (const kv of raw.split('&')) { const [k, v] = kv.split('='); if (k) out[decodeURIComponent(k)] = v === undefined ? '' : decodeURIComponent(v.replace(/\+/g, ' ')); } return out; } try { return JSON.parse(raw); } catch { return null; } })()
+      });
+      response.setHeader('content-type', 'application/json');
+      response.end('{"ok":true}');
+    });
+  });
+  t.after(async () => { server.closeAllConnections(); if (server.listening) await new Promise(resolve => server.close(resolve)); });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const url = origin + '/token';
+
+  // Values chosen to stress curl's config parser: quotes, backslashes, a newline, and
+  // characters that must survive percent-encoding. Non-ASCII is exercised in the body and
+  // form but not in a header: Node's HTTP server exposes header bytes as latin1.
+  const trickyForm = {
+    client_id: '1234567890-abcdefghijklmnopqrstuvwxyz012345.apps.googleusercontent.com',
+    client_secret: 'synthetic"quote\\backslash' + String.fromCharCode(10) + 'newline非ASCII✓',
+    refresh_token: '1//synthetic-non-ascii-token-value',
+    grant_type: 'refresh_token'
+  };
+  const trickyHeader = 'Bearer synthetic"quote\\backslash-token-value';
+  const trickyBody = { note: 'line1\nline2 "quoted" \\backslash 非ASCII ✓', n: 42 };
+
+  // Drive the REAL curl.exe through the same spawnProcess injection point http() uses, so the
+  // stdin config syntax is exercised by curl itself rather than asserted against a mock.
+  const cred = createAgCred({
+    scriptPath: 'unused.ps1', platform: 'win32', oauthClientLoader: async () => [],
+    spawnProcess: (command, args) => spawn(curl, ['-q', ...args], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+  });
+
+  // 1) form request: percent-encoded values arrive decoded and byte-exact
+  await cred.http({ url, method: 'POST', headers: { 'X-Synthetic-Header': trickyHeader }, form: trickyForm });
+  // 2) raw JSON body request: body bytes arrive byte-exact
+  await cred.http({ url: origin + '/body', method: 'POST', body: trickyBody });
+
+  assert.equal(received.length, 2, '两次请求都应到达本机 server');
+  const [formReq, bodyReq] = received;
+
+  // Header fidelity for the quoted ASCII value.
+  assert.equal(formReq.headers['x-synthetic-header'], trickyHeader, 'header 应逐字节透传');
+  assert.equal(formReq.method, 'POST');
+  assert.equal(formReq.url, '/token');
+
+  // form encoding fidelity - decoded back to the exact originals
+  assert.equal(formReq.body && formReq.body.client_id, trickyForm.client_id, 'client_id 应原样到达');
+  assert.equal(formReq.body.client_secret, trickyForm.client_secret, '引号/反斜线/换行应原样到达');
+  assert.equal(formReq.body.refresh_token, trickyForm.refresh_token, '非 ASCII 令牌应原样到达');
+  assert.equal(formReq.body.grant_type, 'refresh_token');
+  // the newline really made it through as a byte, not as a literal escape
+  assert.ok(formReq.body.client_secret.includes('\n'), '换行应作为真实字节传输');
+
+  // raw body fidelity
+  assert.equal(bodyReq.headers['content-type'], 'application/x-www-form-urlencoded');
+  assert.equal(bodyReq.raw, JSON.stringify(trickyBody), 'body 字节不应被改写');
+  assert.equal(bodyReq.url, '/body');
+
 });

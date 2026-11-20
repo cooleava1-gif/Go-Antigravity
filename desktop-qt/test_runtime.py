@@ -1,10 +1,17 @@
-"""Backend selection regressions: no real processes, network, or account access."""
+"""Backend selection regressions: no backend processes, network, or account access.
+
+The only child processes here are two short-lived Python interpreters that exercise the launch
+lock itself (QtCore only).
+"""
 from __future__ import annotations
 
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -83,6 +90,7 @@ class BackendOwnershipTests(unittest.TestCase):
         self.backend._active = True
         self.backend._acquire_launch_lock = Mock()
         self.backend._spawn_backend = Mock()
+        self.backend._claim_data_directory = Mock()
         self.ready = []
         self.errors = []
         self.requests = []
@@ -365,6 +373,234 @@ class BackendCloseTests(unittest.TestCase):
             backend._child_finished()
             self.assertFalse(temporary.exists())
             self.assertFalse(backend.owns_process)
+
+
+class LaunchCoordinationTests(unittest.TestCase):
+    """One data directory, one backend writer: wait for the existing backend, then reuse or start."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QCoreApplication.instance() or QCoreApplication([])
+
+    def setUp(self):
+        self.backend = runtime.BackendRuntime(Path(__file__).resolve().parent.parent)
+        self.backend._active = True
+        self.backend._acquire_launch_lock = Mock()
+        self.backend._spawn_backend = Mock()
+        # Never lock the real checkout data directory from a test.
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.data_directory = Path(temporary.name)
+        self.backend._data_directory = self.data_directory
+        self.errors = []
+        self.ready = []
+        self.backend.failed.connect(self.errors.append)
+        self.backend.ready.connect(self.ready.append)
+        self.backend._get = lambda _url, callback, _token="": callback(503, b"")
+
+    def tearDown(self):
+        self.backend.close()
+        self.app.processEvents()
+
+    def test_start_opens_a_bounded_window_for_an_existing_backend(self):
+        discover = Mock()
+        self.backend._discover = discover
+        self.backend._active = False
+        self.backend.start()
+        discover.assert_called_once()
+        self.assertGreaterEqual(self.backend._existing_deadline - time.monotonic(),
+                                runtime.EXISTING_WAIT_SECONDS - 1)
+
+    def test_existing_backend_is_retried_inside_the_window(self):
+        self.backend._existing_pids = [4242]
+        self.backend._existing_deadline = time.monotonic() + 5
+        with patch.object(runtime.QTimer, "singleShot") as single_shot:
+            self.backend._after_discovery()
+        self.assertEqual(self.errors, [])
+        single_shot.assert_called_once()
+        self.assertEqual(single_shot.call_args[0][0], runtime.RETRY_DISCOVERY_MS)
+        self.assertEqual(single_shot.call_args[0][1], self.backend._discover)
+        self.backend._spawn_backend.assert_not_called()
+        self.backend._acquire_launch_lock.assert_not_called()
+
+    def test_existing_backend_past_the_window_reports_the_mismatch(self):
+        self.backend._existing_pids = [4242]
+        self.backend._existing_deadline = time.monotonic() - 1
+        with patch.object(runtime.QTimer, "singleShot") as single_shot:
+            self.backend._after_discovery()
+        retries = [call.args[0] for call in single_shot.call_args_list
+                   if call.args and call.args[0] == runtime.RETRY_DISCOVERY_MS]
+        self.assertEqual(retries, [])
+        self.assertEqual(len(self.errors), 1)
+        self.assertIn("已发现同目录的后端", self.errors[0])
+        self.backend._spawn_backend.assert_not_called()
+        self.backend._acquire_launch_lock.assert_not_called()
+
+    def test_busy_lock_probes_then_rejects_without_starting_a_second_writer(self):
+        self.backend._lock = Mock(tryLock=Mock(return_value=False), isLocked=Mock(return_value=False))
+        self.backend._lock_deadline = time.monotonic() - 1
+        discover = Mock()
+        self.backend._discover = discover
+        with patch.object(runtime.QTimer, "singleShot") as single_shot:
+            self.backend._try_launch_lock()
+            self.assertEqual(self.errors, [])
+            discover.assert_called_once()
+            self.assertTrue(self.backend._probing)
+            # The last scan found nothing reusable: keep waiting for the lock, never spawn.
+            self.backend._after_discovery()
+            self.assertEqual(self.errors, [])
+            single_shot.assert_called_once_with(runtime.LOCK_RETRY_MS, self.backend._try_launch_lock)
+            self.backend._try_launch_lock()
+        self.assertEqual(len(self.errors), 1)
+        self.assertIn("数据目录正被另一个 Go-Antigravity 实例使用", self.errors[0])
+        self.assertIn("GO_ANTIGRAVITY_DATA_DIR", self.errors[0])
+        self.backend._spawn_backend.assert_not_called()
+        self.backend._acquire_launch_lock.assert_not_called()
+
+    def test_busy_lock_still_reuses_a_backend_of_this_root(self):
+        self.backend._lock = Mock(tryLock=Mock(return_value=False), isLocked=Mock(return_value=True))
+        self.backend._lock_deadline = time.monotonic() + 30
+        self.backend._next_probe = 0.0
+        discover = Mock()
+        self.backend._discover = discover
+        with patch.object(runtime.QTimer, "singleShot") as single_shot:
+            self.backend._try_launch_lock()
+        discover.assert_called_once()
+        self.assertTrue(self.backend._probing)
+        # The probe found a backend of this root: attach to it instead of starting a second writer.
+        self.backend._become_ready(19823)
+        self.assertEqual(self.ready, ["http://127.0.0.1:19823"])
+        self.backend._spawn_backend.assert_not_called()
+        self.assertTrue(self.backend._lock.isLocked(), "a reused backend claims the data directory")
+        single_shot.assert_not_called()
+
+    def test_owned_backend_keeps_the_lock_until_the_child_exits(self):
+        self.backend.owns_process = True
+        self.backend._lock = runtime.launch_lock(self.data_directory)
+        self.assertTrue(self.backend._lock.tryLock(0))
+        self.backend._become_ready(19823)
+        self.assertTrue(self.backend._lock.isLocked(), "ready must not release the writer claim")
+        self.backend._child_finished()
+        self.assertIsNone(self.backend._lock)
+
+    def test_close_holds_the_lock_while_an_owned_child_stops(self):
+        self.backend.owns_process = True
+        self.backend._lock = runtime.launch_lock(self.data_directory)
+        self.assertTrue(self.backend._lock.tryLock(0))
+        child = Mock()
+        child.state.return_value = _REAL_PROCESS.ProcessState.Running
+        self.backend._child = child
+        self.backend.close()
+        self.assertTrue(self.backend._lock.isLocked(), "the claim must outlive the quit request")
+        child.write.assert_called_once_with(b"quit\n")
+        self.backend._child_finished()
+        self.assertIsNone(self.backend._lock)
+
+    def test_reused_close_releases_the_claim_immediately(self):
+        self.backend._lock = runtime.launch_lock(self.data_directory)
+        self.assertTrue(self.backend._lock.tryLock(0))
+        self.backend.owns_process = False
+        self.backend.close()
+        self.app.processEvents()
+        self.assertIsNone(self.backend._lock)
+
+    def test_lock_acquired_rechecks_for_a_backend_started_meanwhile(self):
+        self.backend._lock = Mock(tryLock=Mock(return_value=True), isLocked=Mock(return_value=True))
+        discover = Mock()
+        self.backend._discover = discover
+        self.backend._try_launch_lock()
+        discover.assert_called_once()
+        self.assertTrue(self.backend._waiting_for_lock)
+        self.backend._existing_pids = []
+        self.backend._after_discovery()
+        self.backend._spawn_backend.assert_called_once()
+        self.assertFalse(self.backend._waiting_for_lock)
+
+    def test_spawn_without_the_lock_refuses_to_create_a_writer(self):
+        backend = runtime.BackendRuntime(Path(__file__).resolve().parent.parent)
+        backend._active = True
+        errors = []
+        backend.failed.connect(errors.append)
+        with patch.object(runtime, "backend_node_executable", return_value=None):
+            backend._spawn_backend()
+        self.assertEqual(len(errors), 1)
+        self.assertIn("数据目录锁", errors[0])
+        self.assertIsNone(backend._child)
+        self.assertFalse(backend.owns_process)
+
+    def test_spawn_with_the_lock_reaches_the_node_check(self):
+        backend = runtime.BackendRuntime(Path(__file__).resolve().parent.parent)
+        backend._active = True
+        backend._lock = Mock(isLocked=Mock(return_value=True))
+        errors = []
+        backend.failed.connect(errors.append)
+        with patch.object(runtime, "backend_node_executable", return_value=None):
+            backend._spawn_backend()
+        self.assertEqual(len(errors), 1)
+        self.assertIn("未找到 Node.js", errors[0])
+        self.assertIsNone(backend._child)
+
+
+class LaunchLockContentionTests(unittest.TestCase):
+    """The production lock must exclude a second process and outlive a killed owner."""
+
+    HOLDER = (
+        "import sys, time\n"
+        "from pathlib import Path\n"
+        "import runtime\n"
+        "lock = runtime.launch_lock(Path(sys.argv[1]))\n"
+        "print('acquired' if lock.tryLock(0) else 'busy', flush=True)\n"
+        "time.sleep(60)\n"
+    )
+    PROBE = (
+        "import sys\n"
+        "from pathlib import Path\n"
+        "import runtime\n"
+        "lock = runtime.launch_lock(Path(sys.argv[1]))\n"
+        "print('locked' if lock.tryLock(0) else 'busy', flush=True)\n"
+    )
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QCoreApplication.instance() or QCoreApplication([])
+
+    def probe(self, directory):
+        result = subprocess.run([sys.executable, "-c", self.PROBE, directory],
+                                cwd=str(Path(__file__).resolve().parent), capture_output=True,
+                                text=True, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.strip()
+
+    def test_owned_runtime_claim_outlives_ready_and_another_process_sees_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            data_directory = Path(directory)
+            backend = runtime.BackendRuntime(Path(__file__).resolve().parent.parent)
+            backend._data_directory = data_directory
+            backend._active = True
+            backend.owns_process = True
+            backend._lock = runtime.launch_lock(data_directory)
+            self.assertTrue(backend._lock.tryLock(0))
+            self.assertEqual(self.probe(directory), "busy", "another process must see the claim")
+            backend._become_ready(19823)
+            self.assertEqual(self.probe(directory), "busy", "ready must not release the writer claim")
+            backend._child_finished()
+            self.app.processEvents()
+            self.assertEqual(self.probe(directory), "locked", "the claim ends when the backend exits")
+
+    def test_second_process_is_excluded_and_a_killed_owner_is_reclaimed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            holder = subprocess.Popen([sys.executable, "-c", self.HOLDER, directory],
+                                      cwd=str(Path(__file__).resolve().parent), text=True,
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                self.assertEqual(holder.stdout.readline().strip(), "acquired")
+                self.assertEqual(self.probe(directory), "busy", "a live owner must exclude a rival")
+            finally:
+                holder.kill()
+                holder.wait(timeout=60)
+                holder.stdout.close()
+                holder.stderr.close()
+            self.assertEqual(self.probe(directory), "locked", "a dead owner must not lock the data dir")
 
 
 if __name__ == "__main__":

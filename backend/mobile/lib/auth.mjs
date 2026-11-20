@@ -20,7 +20,7 @@ function finish(res, status, text, headers = {}) {
 export function createAuth({ pin, now = Date.now, timers = { setTimeout, clearTimeout } } = {}) {
   validatePin(pin);
   const sessions = new Map(), failures = new Map(), bindings = new WeakMap();
-  let total = { start: now(), count: 0 }, disposed = false;
+  let disposed = false;
   function release(resource) {
     const binding = bindings.get(resource);
     if (!binding) return;
@@ -80,16 +80,17 @@ export function createAuth({ pin, now = Date.now, timers = { setTimeout, clearTi
   }
   function bucketFor(key) {
     const time = now();
-    if (time - total.start >= 60000) total = { start: time, count: 0 };
     for (const [ip, item] of failures) if (time - item.start >= 60000) failures.delete(ip);
     return failures.get(key) || { start: time, count: 0 };
   }
-  function limited(bucket) { return bucket.count >= 5 || total.count >= 100; }
+  // Per-IP only: five failures per forwarded IP (or loopback socket address) per 60s window.
+  // No shared cross-source bucket, so one source cannot lock out every other client.
+  function limited(bucket) { return bucket.count >= 5; }
   function rateLimit(res) { finish(res, 429, 'Too many attempts. Try again in one minute.', { 'retry-after': '60' }); }
   function failedAttempt(key, res, status, text) {
     const bucket = bucketFor(key);
     if (limited(bucket)) { rateLimit(res); return; }
-    bucket.count++; total.count++; failures.delete(key); failures.set(key, bucket);
+    bucket.count++; failures.delete(key); failures.set(key, bucket);
     if (failures.size > 512) failures.delete(failures.keys().next().value);
     if (!res.destroyed) finish(res, status, text);
   }
@@ -101,7 +102,7 @@ export function createAuth({ pin, now = Date.now, timers = { setTimeout, clearTi
       try { if (new URL(req.headers.origin).host !== req.headers.host) throw Error(); }
       catch { finish(res, 403, 'Forbidden'); return; }
     }
-    // The listener is loopback-only. The aggregate bucket also bounds guesses when forwarded IPs change.
+    // The listener is loopback-only; the per-IP bucket bounds guesses from any single forwarded IP.
     const forwarded = String(req.headers['cf-connecting-ip'] || '');
     const key = /^[a-fA-F0-9:.]{3,64}$/.test(forwarded) ? forwarded : req.socket.remoteAddress || 'local';
     if (limited(bucketFor(key))) { rateLimit(res); return; }

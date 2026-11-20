@@ -85,9 +85,10 @@ async function withAccountApp(task, credentialOverrides = {}, appOptions = {}) {
   }
 }
 
-function seedAccountPair(app, clock) {
+function seedAccountPair(app, clock, { pin = true } = {}) {
   const target = app.accounts.upsert({ email: 'a@example.com', name: 'Account A', accessToken: 'synthetic-a-access', refreshToken: 'synthetic-a-refresh', expiryTs: clock.now + 3600000, clientType: 'public' });
   const selected = app.accounts.upsert({ email: 'b@example.com', name: 'Account B', accessToken: 'synthetic-b-access', refreshToken: 'synthetic-b-refresh', expiryTs: clock.now + 3600000, clientType: 'public', select: true });
+  if (pin) app.accounts.select(selected.id);
   return { target, selected };
 }
 
@@ -198,9 +199,9 @@ test('状态推送缓存物理内核检查，设置仍实时更新且 API 可强
     app.settings.update({ promptTier: '0', contextMode: '900k', autoApplyKernelPatch: false });
     const live = app.status().kernel;
     assert.equal(live.desired.promptTier, 'stock');
-    assert.equal(live.desired.contextMode, '900k');
+    assert.equal(live.desired.contextMode, '512k');
     assert.equal(live.contextCap, 0);
-    assert.equal(live.desiredContextCap, CONTEXT_MODES['900k'].tokens);
+    assert.equal(live.desiredContextCap, CONTEXT_MODES['512k'].tokens);
     assert.equal(live.autoApplyKernelPatch, false);
     assert.equal(reads, 1);
     observed = 'external-upgrade';
@@ -219,7 +220,7 @@ test('直接补丁调用成功、失败及抛错后均使内核检查缓存失�
   await withRealApp(async app => {
     app.status();
     observed = 'patched';
-    assert.equal((await app.applyKernel({ promptTier: '4', contextMode: '512k' })).ok, true);
+    assert.equal((await app.applyKernel({ promptTier: '3', contextMode: '512k' })).ok, true);
     assert.equal(app.status().kernel.targets[0].observed, observed);
     assert.equal(reads, 2);
     assert.equal(app.status().kernel.lastResult.ok, true);
@@ -243,6 +244,109 @@ test('直接补丁调用成功、失败及抛错后均使内核检查缓存失�
   });
 });
 
+test('手动内核应用在目标语言服务器运行时拒绝且不写偏好', async () => {
+  let patches = 0;
+  const probed = [];
+  await withRealApp(async app => {
+    app.settings.update({ promptTier: '0', contextMode: '256k', autoApplyKernelPatch: false });
+    await assert.rejects(app.applyKernel({ promptTier: '3', contextMode: '512k' }), { status: 409, code: 'ag_running' });
+    assert.equal(patches, 0, '运行中不得执行补丁');
+    assert.equal(app.settings.get().promptTier, 'stock', '被拒绝的应用不得写档位偏好');
+    assert.equal(app.settings.get().contextMode, '256k', '被拒绝的应用不得写上下文偏好');
+    assert.equal(probed.length, 1, '每次手动应用询问一次');
+    assert.ok(Array.isArray(probed[0]) && probed[0].length === 2);
+    assert.ok(probed[0].every(target => typeof target === 'string' && target.endsWith('.exe')));
+    assert.ok(app.events.logs().some(item => item.cls === 'tag-warn' && item.message.includes('仍在运行')));
+    assert.equal(app.kernelStatus().lastResult, null, '拒绝不算一次补丁结果');
+  }, {
+    kernelInspector: () => inspectedDesktop('256k'),
+    kernelProcessProbe: async paths => { probed.push(paths); return true; },
+    kernelPatcher: async () => { patches++; return { ok: true, logs: [], errors: [] }; }
+  });
+});
+
+test('无法确认内核是否运行时取消手动应用且不写偏好', async () => {
+  let patches = 0;
+  await withRealApp(async app => {
+    app.settings.update({ promptTier: '0', contextMode: '256k', autoApplyKernelPatch: false });
+    await assert.rejects(app.applyKernel({ promptTier: '3', contextMode: '512k' }), { status: 409, code: 'ag_state_unknown' });
+    assert.equal(patches, 0, '探测失败不得执行补丁');
+    assert.equal(app.settings.get().promptTier, 'stock');
+    assert.equal(app.settings.get().contextMode, '256k');
+    assert.equal(app.kernelStatus().lastResult, null);
+  }, {
+    kernelInspector: () => inspectedDesktop('256k'),
+    kernelProcessProbe: async () => { throw new Error('synthetic powershell failure'); },
+    kernelPatcher: async () => { patches++; return { ok: true, logs: [], errors: [] }; }
+  });
+});
+
+test('手动恢复官方原版同样先判断运行状态且不改动已保存档位', async () => {
+  let patches = 0;
+  await withRealApp(async app => {
+    app.settings.update({ promptTier: '3', contextMode: '512k', autoApplyKernelPatch: false });
+    await assert.rejects(app.applyKernel({ promptTier: 'restore' }), { status: 409, code: 'ag_running' });
+    assert.equal(patches, 0, '恢复也不得在运行中写入内核');
+    assert.equal(app.settings.get().promptTier, '3', '已保存档位不得被提前改写');
+    assert.equal(app.settings.get().contextMode, '512k');
+  }, {
+    kernelInspector: () => inspectedDesktop('256k'),
+    kernelProcessProbe: async () => true,
+    kernelPatcher: async () => { patches++; return { ok: true, logs: [], errors: [] }; }
+  });
+});
+
+test('目标语言服务器未运行时手动应用照常执行', async () => {
+  const seen = [];
+  await withRealApp(async app => {
+    app.settings.update({ autoApplyKernelPatch: false });
+    const result = await app.applyKernel({ promptTier: '3', contextMode: '512k' });
+    assert.equal(result.ok, true);
+    assert.deepStrictEqual(seen, [{ promptTier: '3', contextMode: '512k' }], '探针放行后补丁照常调用');
+    assert.equal(app.settings.get().contextMode, '512k');
+  }, {
+    kernelInspector: () => inspectedDesktop('256k'),
+    kernelProcessProbe: async () => false,
+    kernelPatcher: async input => { seen.push(input); return { ok: true, promptTier: '3', contextMode: '512k', logs: [], errors: [] }; }
+  });
+});
+
+test('启动前自动补丁不询问运行探针，AG 已关闭的语义不变', async () => {
+  let probes = 0;
+  let patches = 0;
+  await withRealApp(async app => {
+    app.settings.update({ preflightProxy: false, autoApplyKernelPatch: true, contextMode: '512k' });
+    await app.session.onBeforeLaunch();
+    assert.equal(patches, 1, '自动启动前补丁必须继续执行');
+    assert.equal(probes, 0, '自动路径不询问手动运行探针');
+  }, {
+    kernelInspector: () => inspectedDesktop('256k'),
+    kernelProcessProbe: async () => { probes++; return true; },
+    kernelPatcher: async input => { patches++; return { ok: true, contextMode: input.contextMode, logs: [], errors: [] }; }
+  });
+});
+
+test('settings.json 损坏回退默认时记录固定中文告警且不回显内容', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'go-antigravity-app-settings-alert-'));
+  fs.writeFileSync(path.join(dataDir, 'settings.json'), '{ "port": 19823, "broken');
+  let app;
+  try {
+    app = await createApplication({
+      rootDir: ROOT_DIR, dataDir, native: false, testMode: true,
+      kernelInspector: () => ({ platformSupported: true, targets: [] })
+    });
+    const alerts = app.events.logs().filter(item => item.category === 'SYSTEM' && item.cls === 'tag-alert');
+    assert.equal(alerts.length, 1, '损坏设置只告警一次');
+    assert.equal(alerts[0].message, '设置文件无法读取或内容无效，已使用默认设置；请检查代理端口和启动选项。');
+    const log = fs.readFileSync(path.join(dataDir, 'go-antigravity.log'), 'utf8');
+    assert.ok(log.includes('设置文件无法读取或内容无效'), '告警必须落盘');
+    assert.ok(!log.includes('broken'), '损坏内容不得回显');
+  } finally {
+    if (app) await app.close('设置告警测试结束');
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 test('启动前无档位漂移时也刷新已缓存的外部内核状态', async () => {
   let reads = 0;
   let observed = 'initial';
@@ -254,7 +358,7 @@ test('启动前无档位漂移时也刷新已缓存的外部内核状态', async
     assert.equal(app.status().kernel.targets[0].observed, observed);
     assert.equal(reads, 2);
   }, {
-    kernelInspector: () => { reads++; return { platformSupported: true, targets: [{ exists: true, promptTier: '4', contextMode: '512k', observed }] }; },
+    kernelInspector: () => { reads++; return { platformSupported: true, targets: [{ exists: true, promptTier: '4', contextMode: '256k', observed }] }; },
     kernelPatcher: async () => { throw new Error('无漂移时不应执行补丁'); }
   });
 });
@@ -289,8 +393,9 @@ function fakeLaunch(app, { fail = false } = {}) {
 }
 
 function inspectedDesktop(mode) {
-  return { platformSupported: true, targets: [{ id: 'desktop', exists: true, promptTier: '4', contextMode: mode,
-    gates: CONTEXT_SIGNATURES.map(signature => ({ id: signature.id, mode })) }] };
+  const gates = CONTEXT_SIGNATURES.filter(signature => !signature.k256)
+    .map(signature => ({ id: signature.id, mode: mode === '256k' ? 'stock' : mode }));
+  return { platformSupported: true, targets: [{ id: 'desktop', exists: true, promptTier: 'stock', contextMode: mode, gates }] };
 }
 
 test('仅保存目标档位不改变已有实例的实际使用率', async () => {
@@ -300,15 +405,15 @@ test('仅保存目标档位不改变已有实例的实际使用率', async () =>
     app.contextMonitor.client = syntheticContextClient();
     const id = '11111111-1111-1111-1111-111111111111';
     const before = (await app.contextMonitor.sample(id)).context;
-    await app.configure({ contextMode: '900k', autoApplyKernelPatch: false });
+    await app.configure({ contextMode: '512k', autoApplyKernelPatch: false });
     const after = (await app.contextMonitor.sample(id)).context;
     assert.equal(before.maxTokens, 256000);
     assert.deepStrictEqual(after, before);
     assert.equal(after.usedFraction, 0.78125);
     assert.equal(app.kernelStatus().contextCap, 0);
-    assert.equal(app.kernelStatus().desiredContextCap, CONTEXT_MODES['900k'].tokens);
+    assert.equal(app.kernelStatus().desiredContextCap, CONTEXT_MODES['512k'].tokens);
     assert.equal(patches, 0);
-  }, { kernelInspector: () => inspectedDesktop('stock'), kernelPatcher: async () => { patches++; throw new Error('不应应用'); } });
+  }, { kernelInspector: () => inspectedDesktop('256k'), kernelPatcher: async () => { patches++; throw new Error('不应应用'); } });
 });
 
 test('本次成功启动锁定已验证容量，运行中保存或应用新档位不篡改它', async () => {
@@ -320,9 +425,9 @@ test('本次成功启动锁定已验证容量，运行中保存或应用新档�
     assert.equal(spawned(), 1);
     const id = '22222222-2222-2222-2222-222222222222';
     assert.equal((await app.contextMonitor.sample(id)).context.maxTokens, CONTEXT_MODES['512k'].tokens);
-    await app.configure({ contextMode: '900k' });
+    await app.configure({ contextMode: '256k' });
     assert.equal((await app.applyKernel()).ok, true);
-    assert.equal(app.kernelStatus().targets[0].contextMode, '900k');
+    assert.equal(app.kernelStatus().targets[0].contextMode, '256k');
     assert.equal(app.kernelStatus().contextCap, CONTEXT_MODES['512k'].tokens);
     assert.equal((await app.contextMonitor.sample(id)).context.maxTokens, CONTEXT_MODES['512k'].tokens);
     await app.session.finish('synthetic exit');
@@ -335,7 +440,7 @@ test('本次成功启动锁定已验证容量，运行中保存或应用新档�
 });
 
 test('未知或混合门限不推断容量，启动失败也不发布有效容量', async t => {
-  for (const kind of ['missing', 'mixed', 'duplicate', 'spawn-error']) await t.test(kind, async () => {
+  for (const kind of ['missing', 'display-only', 'mixed', 'duplicate', 'spawn-error']) await t.test(kind, async () => {
     await withRealApp(async app => {
       app.settings.update({ preflightProxy: false, autoApplyKernelPatch: false });
       fakeLaunch(app, { fail: kind === 'spawn-error' });
@@ -343,8 +448,9 @@ test('未知或混合门限不推断容量，启动失败也不发布有效容�
       assert.equal(app.kernelStatus().contextCap, 0);
       assert.equal((await app.contextMonitor.sample('33333333-3333-3333-3333-333333333333')).context.maxTokens, 256000);
     }, { kernelInspector: () => {
-      const result = inspectedDesktop('900k');
+      const result = inspectedDesktop('512k');
       if (kind === 'missing') result.targets[0].gates = [];
+      if (kind === 'display-only') result.targets[0].gates = result.targets[0].gates.filter(gate => gate.id === 'cli_serializer_max_ctx');
       if (kind === 'mixed') result.targets[0].gates[0].mode = 'stock';
       if (kind === 'duplicate') result.targets[0].gates.push({ ...result.targets[0].gates[0], mode: 'stock' });
       return result;
@@ -365,8 +471,8 @@ test('单个构建只含已知签名子集时仍使用已验证容量', async ()
   } });
 });
 
-test('自动补丁完成后按重新检查的实际容量启动', async () => {
-  let physical = 'stock';
+test('旧 900K 在启动前迁到 512K，并按重新检查的容量启动', async () => {
+  let physical = '900k';
   let patches = 0;
   await withRealApp(async app => {
     app.settings.update({ preflightProxy: false, autoApplyKernelPatch: true, contextMode: '900k' });
@@ -374,44 +480,57 @@ test('自动补丁完成后按重新检查的实际容量启动', async () => {
     assert.equal((await app.session.launch()).ok, true);
     assert.equal(spawned(), 1);
     assert.equal(patches, 1);
-    assert.equal(app.kernelStatus().contextCap, CONTEXT_MODES['900k'].tokens);
-    assert.equal((await app.contextMonitor.sample('44444444-4444-4444-4444-444444444444')).context.maxTokens, CONTEXT_MODES['900k'].tokens);
+    assert.equal(app.kernelStatus().contextCap, CONTEXT_MODES['512k'].tokens);
+    assert.equal((await app.contextMonitor.sample('44444444-4444-4444-4444-444444444444')).context.maxTokens, CONTEXT_MODES['512k'].tokens);
   }, { kernelInspector: () => inspectedDesktop(physical), kernelPatcher: async input => {
     patches++; physical = input.contextMode;
     return { ok: true, logs: [], errors: [] };
   } });
 });
 
+test('launch repairs context config when the binary already matches the preset', async () => {
+  const calls = [];
+  await withRealApp(async app => {
+    app.settings.update({ preflightProxy: false });
+    const spawned = fakeLaunch(app);
+    assert.equal((await app.session.launch()).ok, true);
+    assert.equal(spawned(), 1);
+    assert.deepStrictEqual(calls, [{ contextMode: '256k' }]);
+    assert.equal(app.kernelStatus().contextCap, 256000);
+  }, { kernelInspector: () => ({ ...inspectedDesktop('256k'), contextConfigNeedsSync: calls.length === 0 }),
+    kernelPatcher: async input => { calls.push(input); return { ok: true, logs: [], errors: [] }; } });
+});
+
 test('automatic context recovery never migrates legacy prompt bytes or old preferences', async t => {
-  for (const [tier, version, legacy] of [['1', 1, true], ['2', 1, true], ['3', 1, true], ['4', 1, true], ['4', 2, true], ['4', 1, false]]) {
+  for (const [tier, version, legacy] of [['1', 1, true], ['2', 1, true], ['3', 1, true], ['4', 1, true], ['3', 2, true], ['4', 2, true], ['3', 2, false]]) {
     await t.test(tier + '/' + version + '/' + legacy, async () => {
       const calls = [];
       await withRealApp(async app => {
-        app.settings.update({ preflightProxy: false, contextMode: '900k', promptTier: tier, promptPayloadVersion: version });
+        app.settings.update({ preflightProxy: false, contextMode: '512k', promptTier: tier, promptPayloadVersion: version });
         await app.session.onBeforeLaunch();
-        assert.deepStrictEqual(calls, [{ contextMode: '900k' }]);
+        assert.deepStrictEqual(calls, [{ contextMode: '512k' }]);
         assert.strictEqual(app.settings.get().promptPayloadVersion, version);
       }, { kernelInspector: () => {
-        const result = inspectedDesktop('stock');
-        Object.assign(result.targets[0], { promptTier: legacy ? tier : 'stock', promptLegacy: legacy, promptPayloadVersion: legacy ? 1 : null });
+        const result = inspectedDesktop('256k');
+        Object.assign(result.targets[0], { promptTier: legacy ? tier : 'stock', promptLegacy: legacy, promptPayloadVersion: legacy ? version : null });
         return result;
       }, kernelPatcher: async input => { calls.push(input); return { ok: true, logs: [], errors: [] }; } });
     });
   }
 });
 
-test('explicit prompt apply records v2 consent while a context-only apply leaves it unchanged', async () => {
+test('explicit prompt apply records v3 consent while a context-only apply leaves it unchanged', async () => {
   const calls = [];
   await withRealApp(async app => {
-    app.settings.update({ promptTier: '4', promptPayloadVersion: 1 });
-    await app.applyKernel({ contextMode: '900k' });
-    assert.deepStrictEqual(calls[0], { contextMode: '900k' });
-    assert.strictEqual(app.settings.get().promptTier, '4');
-    assert.strictEqual(app.settings.get().promptPayloadVersion, 1);
-    await app.applyKernel({ promptTier: '4' });
-    assert.deepStrictEqual(calls[1], { promptTier: '4' });
+    app.settings.update({ promptTier: '3', promptPayloadVersion: 2 });
+    await app.applyKernel({ contextMode: '512k' });
+    assert.deepStrictEqual(calls[0], { contextMode: '512k' });
+    assert.strictEqual(app.settings.get().promptTier, '3');
     assert.strictEqual(app.settings.get().promptPayloadVersion, 2);
-  }, { kernelInspector: () => inspectedDesktop('stock'), kernelPatcher: async input => {
+    await app.applyKernel({ promptTier: '3' });
+    assert.deepStrictEqual(calls[1], { promptTier: '3' });
+    assert.strictEqual(app.settings.get().promptPayloadVersion, 3);
+  }, { kernelInspector: () => inspectedDesktop('256k'), kernelPatcher: async input => {
     calls.push(input); return { ok: true, logs: [], errors: [], promptTier: input.promptTier ?? null, contextMode: input.contextMode ?? null };
   } });
 });
@@ -440,13 +559,13 @@ test('kernel apply forwards only the two documented axes', async () => {
   await withRealApp(async app => {
     app.settings.update({ promptTier: '3', contextMode: '512k' });
     // A nested step carries one more login-time toggle as well, so the request must stay exactly two keys.
-    await app.applyKernel({ promptTier: '3', contextMode: '900k', promptText: text, clearCustomPrompt: true, customSystemPrompt: text });
-    assert.deepStrictEqual(calls[0], { promptTier: '3', contextMode: '900k' });
+    await app.applyKernel({ promptTier: '3', contextMode: '256k', promptText: text, clearCustomPrompt: true, customSystemPrompt: text });
+    assert.deepStrictEqual(calls[0], { promptTier: '3', contextMode: '256k' });
     assert.strictEqual(JSON.stringify(calls[0]).includes(text), false);
     assert.strictEqual(app.settings.get().promptTier, '3');
-    assert.strictEqual(app.settings.get().contextMode, '900k');
+    assert.strictEqual(app.settings.get().contextMode, '256k');
     assert.ok(!Object.hasOwn(app.settings.get(), 'customSystemPrompt'));
-  }, { kernelInspector: () => inspectedDesktop('stock'), kernelPatcher: async input => {
+  }, { kernelInspector: () => inspectedDesktop('256k'), kernelPatcher: async input => {
     calls.push(input); return { ok: true, logs: [], errors: [], promptTier: input.promptTier ?? null, contextMode: input.contextMode ?? null };
   } });
 });
@@ -458,10 +577,10 @@ test('empty or omitted kernel apply never supplies implicit prompt migration con
       await withRealApp(async app => {
         app.settings.update({ promptTier: '4', promptPayloadVersion: 1, contextMode: 'stock' });
         await app.applyKernel(input);
-        assert.deepStrictEqual(calls, [{ contextMode: 'stock' }]);
+        assert.deepStrictEqual(calls, [{ contextMode: '256k' }]);
         assert.strictEqual(app.settings.get().promptTier, '4');
         assert.strictEqual(app.settings.get().promptPayloadVersion, 1);
-      }, { kernelInspector: () => inspectedDesktop('stock'), kernelPatcher: async input => {
+      }, { kernelInspector: () => inspectedDesktop('256k'), kernelPatcher: async input => {
         calls.push(input); return { ok: true, logs: [], errors: [], promptTier: input.promptTier ?? null, contextMode: input.contextMode ?? null };
       } });
     });
@@ -470,7 +589,7 @@ test('empty or omitted kernel apply never supplies implicit prompt migration con
 
 test('启动前自动补丁失败必须阻止 spawn 并保留宿主容量', async () => {
   await withRealApp(async app => {
-    app.settings.update({ preflightProxy: false, autoApplyKernelPatch: true, contextMode: '900k' });
+    app.settings.update({ preflightProxy: false, autoApplyKernelPatch: true, contextMode: '512k' });
     const spawned = fakeLaunch(app);
     const result = await app.session.launch();
     assert.equal(result.ok, false);
@@ -478,7 +597,7 @@ test('启动前自动补丁失败必须阻止 spawn 并保留宿主容量', asyn
     assert.equal(spawned(), 0);
     assert.equal(app.kernelStatus().contextCap, 0);
     assert.equal(app.kernelStatus().lastResult.ok, false);
-  }, { kernelInspector: () => inspectedDesktop('stock'), kernelPatcher: async () => ({ ok: false, logs: [], errors: ['synthetic patch failure'] }) });
+  }, { kernelInspector: () => inspectedDesktop('256k'), kernelPatcher: async () => ({ ok: false, logs: [], errors: ['synthetic patch failure'] }) });
 });
 
 test('设为启动在 spawn 前同步所选账户，而选择本身不写系统凭据', async () => {
@@ -498,6 +617,36 @@ test('设为启动在 spawn 前同步所选账户，而选择本身不写系统�
     assert.deepStrictEqual(calls.order, ['refresh', 'write']);
     assert.equal(calls.processes.length, 0);
   });
+});
+
+test('普通启动保留客户端已有登录，取消指定后也不会覆盖', async t => {
+  for (const pin of [false, true]) await t.test(pin ? '取消指定' : '仅保存账户', async () => {
+    await withAccountApp(async (app, { calls, clock, credential, realLaunch }) => {
+      const { selected } = seedAccountPair(app, clock, { pin });
+      if (pin) app.selectAccount(null);
+      selected.locked = true;
+      app.settings.update({ preflightProxy: false, autoApplyKernelPatch: false });
+      const original = credential();
+      const spawned = fakeLaunch(app);
+      assert.equal((await realLaunch()).ok, true);
+      assert.equal(spawned(), 1);
+      assert.deepStrictEqual(credential(), original);
+      assert.deepStrictEqual(calls.order, []);
+      assert.equal(app.status().accounts.hasClientLogin, true);
+      assert.equal(app.status().accounts.startupId, null);
+    });
+  });
+});
+
+test('客户端没有登录时仍可使用工作台保存的启动账户', async () => {
+  await withAccountApp(async (app, { calls, clock, fresh, realLaunch }) => {
+    seedAccountPair(app, clock, { pin: false });
+    app.settings.update({ preflightProxy: false, autoApplyKernelPatch: false });
+    const spawned = fakeLaunch(app);
+    assert.equal((await realLaunch()).ok, true);
+    assert.equal(spawned(), 1);
+    assert.deepStrictEqual(calls.writes, [fresh]);
+  }, { readSystemCredential: async () => null });
 });
 
 test('启动账号已与系统一致时无需重复写入，空账号池也不访问凭据', async t => {
@@ -951,6 +1100,7 @@ test('预刷新失败但缓存令牌仍有效时保留原有安全降级路径',
     const cached = { accessToken: target.accessToken, refreshToken: target.refreshToken, expiryTs: target.expiryTs, clientType: target.clientType };
     const result = await app.switchAccount(target.id);
     assert.equal(result.accounts.activeId, target.id);
+    assert.equal(result.accounts.startupId, null);
     assert.deepStrictEqual(calls.writes, [cached]);
     assert.deepStrictEqual(calls.processes, []);
     assert.equal(result.restarted, false);

@@ -11,7 +11,9 @@ const source = readFileSync(path.join(__dirname, '../features/mobile-access.js')
 const PUBLIC_URL = 'https://first-random-test.trycloudflare.com';
 const FIXED_URL = 'https://mobile.example.test';
 const LOCAL_URL = 'http://127.0.0.1:3082/';
-const ready = { tunnelReady: true, mode: 'quick', publicUrl: PUBLIC_URL, local: LOCAL_URL };
+const METRICS_PORT = 45123;
+const METRICS_URL = 'http://127.0.0.1:' + METRICS_PORT + '/ready';
+const ready = { tunnelReady: true, mode: 'quick', publicUrl: PUBLIC_URL, local: LOCAL_URL, metricsPort: METRICS_PORT };
 const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 
@@ -130,7 +132,7 @@ test('snapshot defaults to portable quick mode without a stale public URL or cre
   const h = harness({ noSpawner: true, noFetch: true });
   assert.deepEqual(JSON.parse(JSON.stringify(h.manager.snapshot())), {
     state: 'stopped', mode: 'quick', fixedUrl: '', fixedConfigured: false, tunnelTokenConfigured: false, fixedAuth: null, publicUrl: null, startupPhase: null,
-    localUrl: LOCAL_URL, pin: null, autoStart: false,
+    localUrl: LOCAL_URL, metricsPort: null, pin: null, autoStart: false,
     managed: false, lastError: null, startedAt: null, available: true,
   });
   await h.manager.close();
@@ -208,7 +210,8 @@ test('only initial identity then exact tunnel readiness and both health checks c
   assert.equal(h.manager.snapshot().state, 'starting');
   spawned.stdout.emit('data', Buffer.from(text.slice(19))); await flush();
   assert.equal((await pending).state, 'running');
-  assert.ok(h.requests.some(value => value.url === 'http://127.0.0.1:20382/ready'));
+  assert.ok(h.requests.some(value => value.url === METRICS_URL));
+  assert.ok(!h.requests.some(value => value.url.includes('20382')), 'must never probe a hardcoded metrics port');
   assert.ok(h.requests.every(value => value.init.method === 'HEAD' && !value.url.includes('token=')));
   await h.manager.close();
 });
@@ -753,4 +756,19 @@ test('the first terminal protocol result wins within a single output chunk', asy
   const result = await pending; assert.equal(result.state, 'error'); assert.match(result.lastError, /cloudflared/);
   assert.equal(result.publicUrl, null); assert.equal(h.published.some(value => value.mobile.state === 'running'), false);
   await h.manager.close();
+});
+
+
+test('a foreign service holding 20382 never affects the dynamic metrics port selection', async () => {
+ // The connector's metrics port is chosen at launch and reported in the validated tunnelReady
+ // line; a foreign listener on the legacy 20382 must not be probed or block startup.
+ const h = harness();
+ const pending = h.manager.start(); await flush();
+ h.children[0].ready();
+ const result = await pending;
+ assert.equal(result.state, 'running');
+ assert.equal(result.metricsPort, METRICS_PORT);
+ assert.ok(h.requests.some(value => value.url === METRICS_URL));
+ assert.ok(!h.requests.some(value => value.url.includes('20382')), 'must never probe the legacy fixed port');
+ await h.manager.close();
 });

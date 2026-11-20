@@ -352,7 +352,7 @@ test('OAuth 无效或重放 state 不写账号，合法回调无需 boot token �
 // ---------- 内核补丁 ----------
 
 test('内核状态接口需要会话令牌，并返回档位词表供 UI 渲染', async () => {
-  const app = stubApp({ kernelStatus: () => ({ desired: { promptTier: '3', contextMode: '900k' }, tiers: { stock: {}, '3': {}, custom: { visible: false, legacy: true } }, modes: { stock: {}, '512k': {}, '900k': {} }, targets: [] }) });
+  const app = stubApp({ kernelStatus: () => ({ desired: { promptTier: '3', contextMode: '512k' }, tiers: { stock: {}, '3': {}, custom: { visible: false, legacy: true } }, modes: { '256k': {}, '512k': {} }, targets: [] }) });
   await withServer(app, async port => {
     const denied = await request(port, { route: '/api/kernel/status', headers: { Host: `127.0.0.1:${port}` } });
     assert.equal(denied.status, 401);
@@ -363,7 +363,7 @@ test('内核状态接口需要会话令牌，并返回档位词表供 UI 渲染'
     assert.equal(body.kernel.desired.promptTier, '3');
     assert.ok(body.kernel.tiers['3'], '档位词表必须随后端下发，UI 不重复定义');
     assert.strictEqual(body.kernel.tiers.custom.visible, false, '已移除的档位只用于识别旧内核状态');
-    assert.ok(body.kernel.modes['900k']);
+    assert.deepStrictEqual(Object.keys(body.kernel.modes), ['256k', '512k']);
     assert.ok(!Object.hasOwn(body.kernel, 'customPrompt'));
     assert.equal(JSON.stringify(body.kernel).includes('自定义提示词全文'), false);
   });
@@ -382,31 +382,31 @@ test('应用内核补丁是 POST，失败时返回 409 且不带 ok:true', async
     const failed = await request(port, {
       method: 'POST', route: '/api/kernel/apply',
       headers: { Host: `127.0.0.1:${port}`, 'X-Go-Antigravity-Token': TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ promptTier: '3', contextMode: '900k' })
+      body: JSON.stringify({ promptTier: '3', contextMode: '512k' })
     });
     assert.equal(failed.status, 409);
     assert.equal(JSON.parse(failed.body).ok, false);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].promptTier, '3');
-    assert.equal(calls[0].contextMode, '900k');
+    assert.equal(calls[0].contextMode, '512k');
   });
 });
 
 test('应用内核补丁成功时回传最新内核状态', async () => {
   const app = stubApp({
-    kernelStatus: () => ({ desired: { promptTier: '3', contextMode: '900k' }, targets: [{ promptTier: '3', contextMode: '900k' }] }),
+    kernelStatus: () => ({ desired: { promptTier: '3', contextMode: '512k' }, targets: [{ promptTier: '3', contextMode: '512k' }] }),
     applyKernel: async () => ({ ok: true, logs: ['[提示词] 已应用'], errors: [] })
   });
   await withServer(app, async port => {
     const ok = await request(port, {
       method: 'POST', route: '/api/kernel/apply',
       headers: { Host: `127.0.0.1:${port}`, 'X-Go-Antigravity-Token': TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ promptTier: '3', contextMode: '900k' })
+      body: JSON.stringify({ promptTier: '3', contextMode: '512k' })
     });
     assert.equal(ok.status, 200);
     const body = JSON.parse(ok.body);
     assert.equal(body.ok, true);
-    assert.deepStrictEqual(body.kernel.targets, [{ promptTier: '3', contextMode: '900k' }]);
+    assert.deepStrictEqual(body.kernel.targets, [{ promptTier: '3', contextMode: '512k' }]);
   });
 });
 
@@ -416,9 +416,9 @@ test('public config/status and kernel apply never echo retired custom prompt fie
   const calls = [];
   const app = stubApp({
     settings: { get: () => ({ ...saved }) },
-    status: () => ({ port: 7890, kernel: { desired: { promptTier: 'stock', contextMode: '900k' }, targets: [] } }),
+    status: () => ({ port: 7890, kernel: { desired: { promptTier: 'stock', contextMode: '512k' }, targets: [] } }),
     configure: async body => { calls.push(['config', body]); },
-    kernelStatus: () => ({ desired: { promptTier: 'stock', contextMode: '900k' }, targets: [] }),
+    kernelStatus: () => ({ desired: { promptTier: 'stock', contextMode: '512k' }, targets: [] }),
     applyKernel: async body => { calls.push(['apply', body]); return { ok: true, logs: [], errors: [] }; }
   });
   await withServer(app, async port => {
@@ -437,10 +437,10 @@ test('public config/status and kernel apply never echo retired custom prompt fie
     assert.equal(config.body.includes('customSystemPrompt'), false);
     assert.equal(config.body.includes('customPromptUpdatedAt'), false);
     // Retired fields in the body are dropped instead of being forwarded to the patcher.
-    const apply = await request(port, { method: 'POST', route: '/api/kernel/apply', headers, body: JSON.stringify({ promptTier: '3', contextMode: '900k', promptText: secret, clearCustomPrompt: true }) });
+    const apply = await request(port, { method: 'POST', route: '/api/kernel/apply', headers, body: JSON.stringify({ promptTier: '3', contextMode: '512k', promptText: secret, clearCustomPrompt: true }) });
     assert.equal(apply.status, 200);
     const forwarded = calls.find(([kind]) => kind === 'apply')[1];
-    assert.deepStrictEqual(forwarded, { promptTier: '3', contextMode: '900k' });
+    assert.deepStrictEqual(forwarded, { promptTier: '3', contextMode: '512k' });
     assert.equal(JSON.stringify(forwarded).includes(secret), false);
   });
 });
@@ -453,9 +453,9 @@ test('kernel apply keeps the API body limit without a custom text channel', asyn
   });
   await withServer(app, async port => {
     const headers = { Host: `127.0.0.1:${port}`, 'X-Go-Antigravity-Token': TOKEN, 'Content-Type': 'application/json' };
-    const ok = await request(port, { method: 'POST', route: '/api/kernel/apply', headers, body: JSON.stringify({ promptTier: '3', contextMode: '900k', promptText: 'x'.repeat(3960) }) });
+    const ok = await request(port, { method: 'POST', route: '/api/kernel/apply', headers, body: JSON.stringify({ promptTier: '3', contextMode: '512k', promptText: 'x'.repeat(3960) }) });
     assert.equal(ok.status, 200);
-    assert.deepStrictEqual(calls[0], { promptTier: '3', contextMode: '900k' }, '大字段不再有通道，也不会被转发');
+    assert.deepStrictEqual(calls[0], { promptTier: '3', contextMode: '512k' }, '大字段不再有通道，也不会被转发');
     const oversized = await request(port, { method: 'POST', route: '/api/kernel/apply', headers, body: JSON.stringify({ promptTier: '3', padding: 'y'.repeat(64 * 1024 + 1) }) });
     assert.equal(oversized.status, 400);
     assert.match(oversized.body, /请求内容过大|过大/);

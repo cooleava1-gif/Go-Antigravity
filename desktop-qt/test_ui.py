@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 # On Windows the offscreen Qt plugin does not automatically load system fonts.
 # Without real font metrics, geometry assertions do not represent the desktop UI.
@@ -16,8 +17,9 @@ if sys.platform == "win32" and os.environ.get("QT_QPA_PLATFORM") == "offscreen":
         os.environ.setdefault("QT_QPA_FONTDIR", system_fonts)
 
 from PyQt6.QtCore import QCoreApplication, QEvent, QSettings, QTemporaryDir, Qt
+from PyQt6.QtGui import QShortcut
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QPushButton
+from PyQt6.QtWidgets import QApplication, QDialog, QFileDialog, QPushButton
 
 from backend_client import BackendClient
 from main import demo_snapshot
@@ -35,6 +37,10 @@ class FrontendRegressionTests(unittest.TestCase):
         QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, cls.settings_dir.path())
 
     def setUp(self):
+        # General UI cases exercise explicit shutdown independently of host tray support.
+        tray_patch = patch("ui.create_tray", return_value=None)
+        tray_patch.start()
+        self.addCleanup(tray_patch.stop)
         self.window = MainWindow(demo=False)
         self.client = FakeClient()
         self.window.bind_client(self.client)
@@ -407,18 +413,18 @@ class FrontendRegressionTests(unittest.TestCase):
     def test_visible_prompt_tiers_offer_only_stock_and_compact(self):
         w = self.window
         self.assertEqual([key for _, key in w.tier._items], ["stock", "3"])
-        self.assertEqual([text for text, _ in w.tier._items], ["官方原版", "精简·防编造"])
+        self.assertEqual([text for text, _ in w.tier._items], ["官方原版", "最大化精简"])
+        self.assertEqual(w.tier.currentData(), "stock")
         # The removed custom tier must not survive as a hidden control in the window.
         self.assertFalse(hasattr(w, "custom_prompt_button"))
         self.assertFalse(hasattr(w, "custom_prompt_status_label"))
         self.assertFalse(hasattr(w, "_custom_prompt_draft"))
-        self.assertEqual([key for _, key in w.context._items], ["stock", "512k", "900k"])
-        self.assertIn("1M", w.context._items[2][0])
-        self.assertIn("1M", w.CTX_HINTS["900k"])
-        self.assertIn("983,040", w.CTX_HINTS["900k"])
+        self.assertEqual(w.context._items, [("256K（默认）", "256k"), ("512K", "512k")])
+        self.assertEqual(w.context.currentData(), "256k")
+        self.assertIn("256,000", w.CTX_HINTS["256k"])
         self.assertIn("512,000", w.CTX_HINTS["512k"])
 
-    def test_three_prompt_choices_preserve_legacy_read_without_silent_selection(self):
+    def test_legacy_prompt_stays_until_explicit_prompt_choice(self):
         w = self.window
         w.confirm = lambda *args: True
         for legacy in ("1", "2", "4"):
@@ -428,25 +434,31 @@ class FrontendRegressionTests(unittest.TestCase):
                 state["kernel"]["desired"]["promptTier"] = legacy
                 w.render_status(state)
                 self.assertIsNone(w.tier.currentData())
-                self.assertIn(f"旧 {legacy} 档", w.tier_hint_label.text())
+                self.assertIn("旧", w.tier_hint_label.text())
                 w.apply_kernel()
                 self.assertEqual(len(self.client.calls), before, "legacy tier must not be silently applied")
         state = deepcopy(demo_snapshot())
         state["kernel"]["desired"]["promptTier"] = "3"
+        state["kernel"]["promptPreferenceVersion"] = 2
+        state["kernel"]["targets"][0].update(promptTier="3", promptPayloadVersion=2, promptLegacy=True)
         w.render_status(state)
         self.assertEqual(w.tier.currentData(), "3")
+        QTest.mouseClick(w.context._buttons[1], Qt.MouseButton.LeftButton)
         w.apply_kernel()
-        payload = self.client.calls[-1][2]
-        self.assertEqual(payload["promptTier"], "3")
-        self.assertNotIn("promptText", payload)
+        self.assertEqual(self.client.calls[-1][2], {"contextMode": "512k"})
+        state["kernel"]["desired"]["contextMode"] = "512k"
+        self.client.finish("kernel-apply", {"ok": True, "kernel": state["kernel"]})
+        QTest.mouseClick(w.tier._buttons[1], Qt.MouseButton.LeftButton)
+        w.apply_kernel()
+        self.assertEqual(self.client.calls[-1][2], {"promptTier": "3"})
 
     def test_kernel_apply_sends_exactly_the_two_axes(self):
         w = self.window
         w.confirm = lambda *args: True
         w.tier.setCurrentIndex(w.tier.findData("3"))
-        w.context.setCurrentIndex(w.context.findData("900k"))
+        w.context.setCurrentIndex(w.context.findData("512k"))
         w.apply_kernel()
-        self.assertEqual(self.client.calls[-1][2], {"promptTier": "3", "contextMode": "900k"})
+        self.assertEqual(self.client.calls[-1][2], {"promptTier": "3", "contextMode": "512k"})
 
     def test_restore_sends_the_stock_axes_only(self):
         w = self.window
@@ -454,7 +466,7 @@ class FrontendRegressionTests(unittest.TestCase):
         w.apply_kernel(restore=True)
         self.assertEqual(
             self.client.calls[-1][2],
-            {"promptTier": "stock", "contextMode": "stock"},
+            {"promptTier": "stock", "contextMode": "256k"},
         )
 
     def test_fixed_token_form_is_reachable_in_both_themes_at_minimum_size(self):
@@ -515,6 +527,86 @@ class FrontendRegressionTests(unittest.TestCase):
                 self.assertGreaterEqual(origin.x(), 0)
                 self.assertLessEqual(origin.x() + button.width(), viewport.width())
                 self.assertTrue(button.isVisible())
+
+    def test_numbered_shortcuts_cover_exactly_the_four_visible_pages(self):
+        w = self.window
+        keys = sorted(s.key().toString() for s in w.findChildren(QShortcut))
+        self.assertEqual(keys, ["Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4", "Ctrl+R"])
+        # In-app links still resolve the retired indices onto existing pages.
+        w.navigate(4, animate=False)
+        self.assertEqual(w.stack.currentIndex(), 2)
+        w.navigate(5, animate=False)
+        self.assertEqual(w.stack.currentIndex(), 3)
+
+    def test_kernel_controls_need_an_explicit_support_flag(self):
+        w = self.window
+        controls = (w.tier, w.context, w.kernel_button, w.restore_button)
+        state = deepcopy(demo_snapshot())
+        w.render_status(state)
+        self.assertTrue(all(c.isEnabled() for c in controls))
+        self.assertNotIn("未报告", w.kernel_hint.text())
+
+        missing = deepcopy(demo_snapshot())
+        del missing["kernel"]["platformSupported"]
+        w.render_status(missing)
+        self.assertTrue(all(not c.isEnabled() for c in controls))
+        self.assertIn("未报告", w.kernel_hint.text())
+
+        unsupported = deepcopy(demo_snapshot())
+        unsupported["kernel"]["platformSupported"] = False
+        w.render_status(unsupported)
+        self.assertTrue(all(not c.isEnabled() for c in controls))
+        self.assertIn("不支持", w.kernel_hint.text())
+
+    def test_mobile_page_names_the_desktop_precondition_without_faking_online(self):
+        w = self.window
+        state = deepcopy(demo_snapshot())
+        w.render_status(state)
+        self.assertIn("桌面端 Antigravity 未运行", w.mobile_desktop_note.text())
+        self.assertIn("未连接桌面端", w.mobile_desktop_note.text())
+
+        state["phase"] = "running"
+        w.render_status(state)
+        self.assertIn("桌面端 Antigravity 运行中", w.mobile_desktop_note.text())
+        self.assertNotIn("未连接桌面端", w.mobile_desktop_note.text())
+        self.assertNotIn("在线", w.mobile_desktop_note.text())
+
+        w.set_online(False)
+        w.render_mobile(state["mobile"])
+        self.assertIn("桌面端尚未连接", w.mobile_desktop_note.text())
+        self.assertIn("不会显示虚假在线", w.mobile_desktop_note.text())
+
+    def test_demo_window_previews_actions_without_mutating_anything(self):
+        demo = MainWindow(demo=True)
+        try:
+            demo.resize(940, 580)
+            demo.show()
+            demo.render_status(demo_snapshot())
+            demo.set_logs([])
+            demo.navigate(0, animate=False)
+            demo.settle_animations()
+            self.app.processEvents()
+            self.assertTrue(demo.kernel_button.isEnabled())
+            self.assertTrue(demo.account_tools.capture_button.isEnabled())
+            self.assertTrue(demo.account_tools.import_button.isEnabled())
+            self.assertFalse(demo.perform("kernel-apply", "/api/kernel/apply", {}))
+            self.assertIn("预览模式", demo.notice.text())
+            self.assertEqual(demo._pending, {})
+            with patch.object(QDialog, "exec", side_effect=AssertionError("demo opened a dialog")), \
+                    patch.object(QFileDialog, "getOpenFileName", side_effect=AssertionError("demo opened a file dialog")), \
+                    patch.object(QFileDialog, "getSaveFileName", side_effect=AssertionError("demo opened a file dialog")):
+                demo.account_tools.capture_current()
+                demo.account_tools.import_accounts()
+                demo.account_tools.export_accounts()
+            self.assertEqual(demo._pending, {})
+            self.assertIn("预览模式", demo.notice.text())
+            self.assertIn("预览模式", demo.mobile_desktop_note.text())
+        finally:
+            demo._closing = True
+            demo.hide()
+            demo.deleteLater()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            self.app.processEvents()
 
 
 if __name__ == "__main__":

@@ -48,7 +48,7 @@ function setupPatchCase(t, buffer = buildKernel()) {
   });
   const config = path.join(home, '.gemini', 'config', 'config.json');
   const cliConfig = path.join(home, '.gemini', 'antigravity-cli', 'settings.json');
-  const originalConfig = JSON.stringify({ theme: 'dark', contextWindow: '512K', other: { keep: true } }) + '\n';
+  const originalConfig = JSON.stringify({ theme: 'dark', contextWindow: 'custom-384K', other: { keep: true } }) + '\n';
   fs.mkdirSync(path.dirname(config), { recursive: true });
   fs.mkdirSync(path.dirname(cliConfig), { recursive: true });
   fs.writeFileSync(config, originalConfig);
@@ -155,6 +155,12 @@ function buildKernel(templates = TEMPLATES) {
   return file;
 }
 
+function writeLegacyContext(buffer) {
+  for (const [index, signature] of CONTEXT_SIGNATURES.entries()) {
+    buffer.write(signature.k900, SIGNATURES_OFF + index * 64, 'hex');
+  }
+}
+
 function tempTarget(name = 'language_server.exe') {
   const dir = tempDir('go-antigravity-kernel-');
   return { dir, path: path.join(dir, 'bin', name), backupPath: path.join(dir, 'bin', `${name}.bak`) };
@@ -175,29 +181,83 @@ function withHome(run) {
   try { return run(home); } finally { fs.rmSync(home, { recursive: true, force: true }); }
 }
 
-test('locked writer stops only the executable it failed to replace', async t => {
+test('a doubly locked writer refuses the patch instead of stopping the language server', async t => {
   const fixture = setupPatchCase(t);
+  const original = read(fixture.target);
   const calls = [];
-  let locked = true;
   const patcher = loadPatcher({
     openSync(file, flags) {
-      if (locked && file === fixture.target.path && flags === 'r+') throw Error('locked');
+      // In-place writing fails because the image is locked by the running language server.
+      if (file === fixture.target.path && flags === 'r+') throw Error('locked');
       return fs.openSync(file, flags);
     },
-    renameSync(from, to) {
-      if (locked && from === fixture.target.path) throw Error('locked');
-      fs.renameSync(from, to);
+    renameSync(from) {
+      // Even renaming the running image away is blocked (AV or a still-mapped leftover).
+      if (from === fixture.target.path) throw Error('locked');
+      fs.renameSync(from, ...Array.prototype.slice.call(arguments, 1));
     }
   }, (file, args, options, callback) => {
     if (/compact\.exe$/i.test(file)) return callback(null);
     calls.push({ file, script: path.basename(args[args.indexOf('-File') + 1]), stop: args.includes('-StopTargets'),
       paths: JSON.parse(options.env.GO_ANTIGRAVITY_KERNEL_TARGET_PATHS) });
-    locked = false;
     callback(null, '1\r\n');
   });
+  // A durable backup from an earlier successful apply must survive a refused patch.
+  const backupPath = fixture.target.path + '.bak';
+  fs.copyFileSync(fixture.target.path, backupPath);
   const result = await patcher.applyKernelPatch({ contextMode: '512k' }, { targets: [fixture.target], homeDir: fixture.home });
-  assert.equal(result.ok, true, result.errors.join('\n'));
-  assert.deepStrictEqual(calls, [{ file: 'powershell.exe', script: 'kernel-processes.ps1', stop: true, paths: [fixture.target.path] }]);
+  assert.equal(result.ok, false);
+  // The fallback must never execute a process: a lost conversation is worse than a deferred patch.
+  assert.deepStrictEqual(calls, []);
+  assert.ok(result.errors.some(message => message.includes('被运行中的 Antigravity 或安全软件锁定')), result.errors.join('\n'));
+  assert.ok(result.errors.some(message => message.includes('请先完全退出 Antigravity')), result.errors.join('\n'));
+  // The kernel on disk is still the untouched stock image, and the durable backup stays available.
+  assert.deepStrictEqual(read(fixture.target), original);
+  assert.deepStrictEqual(fs.readFileSync(backupPath), original, 'the durable backup must stay pristine');
+  assert.ok(!fs.existsSync(fixture.target.path + '.old_run'), 'no stale renamed image may be left behind');
+  assertConfigUnchanged(fixture);
+});
+
+test('languageServerRunning counts same-user processes and never asks for a stop', async t => {
+  const fixture = setupPatchCase(t);
+  const calls = [];
+  const patcher = loadPatcher({}, (file, args, options, callback) => {
+    if (/compact\.exe$/i.test(file)) return callback(null);
+    const paths = JSON.parse(options.env.GO_ANTIGRAVITY_KERNEL_TARGET_PATHS);
+    calls.push({ file, script: path.basename(args[args.indexOf('-File') + 1]),
+      stop: args.includes('-StopTargets'), paths });
+    // The stub counts a same-user language server only for the fixture target.
+    callback(null, (paths.includes(fixture.target.path) ? '2' : '0') + '\r\n');
+  });
+  t.after(() => fs.rmSync(fixture.target.dir, { recursive: true, force: true }));
+
+  // Without arguments the probe must cover exactly the targets this build would patch.
+  assert.equal(await patcher.languageServerRunning(), false, 'no stub process runs for the real target paths');
+  assert.equal(await patcher.languageServerRunning([fixture.target.path]), true, 'a counted process must report running');
+  assert.equal(await patcher.languageServerRunning(['D:\\unrelated\\language_server.exe']), false);
+  assert.equal(calls.length, 3);
+  for (const call of calls) {
+    assert.equal(call.file, 'powershell.exe');
+    assert.equal(call.script, 'kernel-processes.ps1');
+    assert.equal(call.stop, false, 'the probe must never ask for a stop');
+  }
+  assert.equal(calls[0].paths.length, 2, 'the default probe covers every patchable target');
+  assert.ok(calls[0].paths[0].endsWith(path.join('resources', 'bin', 'language_server.exe')), calls[0].paths[0]);
+  assert.ok(calls[0].paths[1].endsWith('language_server_windows_x64.exe'), calls[0].paths[1]);
+  assert.deepStrictEqual(calls[1].paths, [fixture.target.path], 'explicit paths are honoured verbatim');
+  assert.deepStrictEqual(calls[2].paths, ['D:\\unrelated\\language_server.exe']);
+});
+
+test('languageServerRunning refuses to guess when the count is unreadable', async t => {
+  const fixture = setupPatchCase(t);
+  const patcher = loadPatcher({}, (file, args, options, callback) => {
+    if (/compact\.exe$/i.test(file)) return callback(null);
+    callback(null, 'not-a-count');
+  });
+  t.after(() => fs.rmSync(fixture.target.dir, { recursive: true, force: true }));
+  await assert.rejects(patcher.languageServerRunning([fixture.target.path]), {
+    message: '无法确认此用户的目标内核是否正在运行，请手动退出 Antigravity 后重试'
+  });
 });
 
 test('tier and mode normalisation accepts the documented spellings and rejects junk', () => {
@@ -208,14 +268,11 @@ test('tier and mode normalisation accepts the documented spellings and rejects j
     assert.ok(PROMPT_TIERS[normalizePromptTier(value)], `tier ${value}`);
   }
   assert.strictEqual(normalizePromptTier('9'), null);
-  assert.strictEqual(normalizeContextMode('1m'), '900k');
-  assert.strictEqual(normalizeContextMode('900K'), '900k');
+  assert.strictEqual(normalizeContextMode('1m'), '512k');
+  assert.strictEqual(normalizeContextMode('900K'), '512k');
   assert.strictEqual(normalizeContextMode('512'), '512k');
-  assert.strictEqual(normalizeContextMode('restore'), 'stock');
+  assert.strictEqual(normalizeContextMode('restore'), '256k');
   assert.strictEqual(normalizeContextMode('2m'), null);
-  assert.strictEqual(CONTEXT_MODES['900k'].tokens, 983040);
-  assert.strictEqual(CONTEXT_MODES['512k'].tokens, 512000);
-  assert.strictEqual(CONTEXT_MODES.stock.tokens, 0);
 });
 
 test('resolveTargets honours GO_ANTIGRAVITY_AG_EXE for the desktop kernel', () => {
@@ -392,7 +449,7 @@ test('invalid PE fixtures fail before backup creation or config publication', as
   for (const { name, buffer } of [...invalidPeFixtures(), ...invalidTemplateFixtures()]) {
     await t.test(name, async t => {
       const fixture = setupPatchCase(t, buffer);
-      const result = await applyKernelPatch({ promptTier: '4', contextMode: '512k' }, { targets: [fixture.target], homeDir: fixture.home });
+      const result = await applyKernelPatch({ promptTier: '3', contextMode: '512k' }, { targets: [fixture.target], homeDir: fixture.home });
       assert.strictEqual(result.ok, false, name);
       assert.ok(read(fixture.target).equals(buffer));
       assert.strictEqual(fs.existsSync(fixture.target.backupPath), false);
@@ -401,13 +458,18 @@ test('invalid PE fixtures fail before backup creation or config publication', as
   }
 });
 
-test('a stock kernel reports stock tier and stock context gates', () => {
+test('stock CLI and IDE context limits differ even though the raw gates are stock', () => {
   const buffer = buildKernel();
   const slots = parseEmbedTemplates(buffer);
   assert.strictEqual(detectPromptTier(slots, buffer), 'stock');
-  assert.strictEqual(detectContextMode(buffer), 'stock');
+  assert.strictEqual(detectContextMode(buffer), 'mixed');
   assert.strictEqual(inspectContextGates(buffer).length, CONTEXT_SIGNATURES.length);
   for (const gate of inspectContextGates(buffer)) assert.strictEqual(gate.mode, 'stock');
+  buffer.fill(0, SIGNATURES_OFF, SIGNATURES_OFF + 3 * 64);
+  assert.strictEqual(detectContextMode(buffer), 'stock', 'IDE stock limit is not 256K');
+  const next = Buffer.from(buffer);
+  applyContextPatch(next, buffer, '256k');
+  assert.strictEqual(detectContextMode(next), '256k');
 });
 
 test('a build with a different auxiliary template set is recognized as stock and stays patchable', () => {
@@ -556,11 +618,12 @@ test('a damaged identity block aborts the patch instead of writing it', () => {
 });
 
 test('every prompt payload fits the smallest slot it can land in', () => {
-  for (const tier of ['3', '4']) {
-    for (const name of CORE_SLOTS) {
-      const group = require('../features/kernel-prompt-payloads.json').tiers[tier === '3' ? 'tier3' : 'tier4'];
-      const key = name.endsWith('guidelines.tmpl') ? 'guidelines' : name.endsWith('function_call.tmpl') ? 'functionCall' : 'communicationStyle';
-      assert.ok(Buffer.byteLength(group[key]) <= SLOT_CAPACITY[name], `${tier}/${name} overflows`);
+  const { tiers, previousTiers, legacyTiers } = require('../features/kernel-prompt-payloads.json');
+  for (const groups of [tiers, previousTiers, legacyTiers]) {
+    for (const [tier, group] of Object.entries(groups)) {
+      for (const [index, key] of ['guidelines', 'functionCall', 'communicationStyle'].entries()) {
+        assert.ok(Buffer.byteLength(group[key]) <= SLOT_CAPACITY[CORE_SLOTS[index]], `${tier}/${key} overflows`);
+      }
     }
   }
 });
@@ -579,7 +642,7 @@ test('writePaddedTemplate refuses to overflow a slot and pads with a render-noth
 test('context patches rewrite every signature and are reversible', () => {
   const original = buildKernel();
   const backup = Buffer.from(original);
-  for (const mode of ['900k', '512k', 'stock']) {
+  for (const mode of ['256k', '512k']) {
     const buffer = Buffer.from(original);
     const gates = applyContextPatch(buffer, backup, mode);
     assert.strictEqual(gates.length, CONTEXT_SIGNATURES.length, mode);
@@ -587,25 +650,25 @@ test('context patches rewrite every signature and are reversible', () => {
     for (const gate of gates) assert.ok(gate.offset >= 0);
   }
   const restored = Buffer.from(original);
-  applyContextPatch(restored, backup, '900k');
+  applyContextPatch(restored, backup, '512k');
   applyContextPatch(restored, backup, 'stock');
   assert.ok(restored.equals(original));
   // A patch is anchored on the backup, so re-applying over an already-patched image is a no-op.
   const again = Buffer.from(original);
-  applyContextPatch(again, backup, '900k');
-  applyContextPatch(again, backup, '900k');
-  assert.strictEqual(detectContextMode(again), '900k');
+  applyContextPatch(again, backup, '512k');
+  applyContextPatch(again, backup, '512k');
+  assert.strictEqual(detectContextMode(again), '512k');
 });
 
 test('context config sync writes and removes the contextWindow key', () => {
   withHome(home => {
     fs.mkdirSync(path.join(home, '.gemini', 'config'), { recursive: true });
     fs.writeFileSync(path.join(home, '.gemini', 'config', 'config.json'), JSON.stringify({ theme: 'dark' }) + '\n');
-    syncContextWindowConfig('900k', home);
+    syncContextWindowConfig('512k', home);
     const written = JSON.parse(fs.readFileSync(path.join(home, '.gemini', 'config', 'config.json'), 'utf8'));
-    assert.strictEqual(written.contextWindow, '900K');
+    assert.strictEqual(written.contextWindow, '512K');
     assert.strictEqual(written.theme, 'dark', 'unrelated keys must survive');
-    assert.strictEqual(detectConfiguredContextCap(home), 983040);
+    assert.strictEqual(detectConfiguredContextCap(home), 512000);
     syncContextWindowConfig('stock', home);
     assert.strictEqual(JSON.parse(fs.readFileSync(path.join(home, '.gemini', 'config', 'config.json'), 'utf8')).contextWindow, undefined);
     assert.strictEqual(detectConfiguredContextCap(home), 0);
@@ -615,7 +678,7 @@ test('context config sync writes and removes the contextWindow key', () => {
 test('context config sync leaves a non-existent config directory alone', () => {
   withHome(home => {
     assert.strictEqual(detectConfiguredContextCap(home), 0);
-    const logs = syncContextWindowConfig('900k', home);
+    const logs = syncContextWindowConfig('512k', home);
     assert.ok(fs.existsSync(path.join(home, '.gemini', 'config')) === false, 'must not create config dirs');
     assert.strictEqual(logs.length, 0);
   });
@@ -657,24 +720,26 @@ test('applyKernelPatch backs up once, patches, then reports a no-op second run',
     // Leave config directories for products the user never ran untouched.
     fs.mkdirSync(path.join(home, '.gemini', 'config'), { recursive: true });
     try {
-      const first = await applyKernelPatch({ promptTier: '4', contextMode: '900k' }, { targets: [target], homeDir: home });
+      const first = await applyKernelPatch({ promptTier: '3', contextMode: '512k' }, { targets: [target], homeDir: home });
       assert.strictEqual(first.ok, true, JSON.stringify(first));
       assert.ok(fs.existsSync(target.backupPath), 'backup must be created');
       assert.ok(fs.readFileSync(target.backupPath).equals(buildKernel()), 'backup must remain pristine');
       assert.ok(read(target).toString('hex').includes('e975ffffff90'), 'applyEdits bypass applied');
-      assert.strictEqual(detectContextMode(read(target)), '900k');
-      assert.strictEqual(detectPromptTier(parseEmbedTemplates(read(target)), read(target)), '4');
-      assert.strictEqual(detectConfiguredContextCap(home), 983040);
+      assert.strictEqual(detectContextMode(read(target)), '512k');
+      assert.strictEqual(detectPromptTier(parseEmbedTemplates(read(target)), read(target)), '3');
+      assert.strictEqual(detectConfiguredContextCap(home), 512000);
 
-      const second = await applyKernelPatch({ promptTier: '4', contextMode: '900k' }, { targets: [target], homeDir: home });
+      const second = await applyKernelPatch({ promptTier: '3', contextMode: '512k' }, { targets: [target], homeDir: home });
       assert.strictEqual(second.ok, true);
       assert.ok(second.logs.some(line => line.includes('无需写入')), second.logs.join('\n'));
       assert.ok(read(target).equals(fs.readFileSync(target.backupPath)) === false, 'still patched');
 
-      const restore = await applyKernelPatch({ promptTier: 'stock', contextMode: 'stock' }, { targets: [target], homeDir: home });
+      const restore = await applyKernelPatch({ promptTier: 'stock', contextMode: '256k' }, { targets: [target], homeDir: home });
       assert.strictEqual(restore.ok, true, JSON.stringify(restore));
-      assert.ok(read(target).equals(buildKernel()), 'restore must reproduce the pristine image');
-      assert.strictEqual(detectConfiguredContextCap(home), 0);
+      const original = buildKernel(), expected = Buffer.from(original);
+      applyContextPatch(expected, original, '256k');
+      assert.ok(read(target).equals(expected), 'restore keeps official prompts and applies the 256K IDE cap');
+      assert.strictEqual(detectConfiguredContextCap(home), 256000);
     } finally { fs.rmSync(home, { recursive: true, force: true }); }
   } finally { fs.rmSync(path.dirname(target.path), { recursive: true, force: true }); }
 });
@@ -683,19 +748,69 @@ test('applying one axis leaves the other axis untouched', async () => {
   const original = buildKernel();
   const target = place(tempTarget(), original);
   try {
-    await applyKernelPatch({ promptTier: '4' }, { targets: [target], homeDir: target.dir });
+    await applyKernelPatch({ promptTier: '3' }, { targets: [target], homeDir: target.dir });
     const afterPrompt = read(target);
-    assert.strictEqual(detectContextMode(afterPrompt), 'stock', 'prompt-only patch must not touch context bytes');
-    assert.strictEqual(detectPromptTier(parseEmbedTemplates(afterPrompt), afterPrompt), '4');
+    assert.deepStrictEqual(inspectContextGates(afterPrompt), inspectContextGates(original), 'prompt-only patch must not touch context bytes');
+    assert.strictEqual(detectPromptTier(parseEmbedTemplates(afterPrompt), afterPrompt), '3');
 
-    await applyKernelPatch({ contextMode: '900k' }, { targets: [target], homeDir: target.dir });
+    await applyKernelPatch({ contextMode: '512k' }, { targets: [target], homeDir: target.dir });
     const afterContext = read(target);
-    assert.strictEqual(detectPromptTier(parseEmbedTemplates(afterContext), afterContext), '4', 'context-only patch must not reset prompt tiers');
-    assert.strictEqual(detectContextMode(afterContext), '900k');
+    assert.strictEqual(detectPromptTier(parseEmbedTemplates(afterContext), afterContext), '3', 'context-only patch must not reset prompt tiers');
+    assert.strictEqual(detectContextMode(afterContext), '512k');
 
-    await applyKernelPatch({ promptTier: 'stock', contextMode: 'stock' }, { targets: [target], homeDir: target.dir });
-    assert.ok(read(target).equals(original));
+    await applyKernelPatch({ promptTier: 'stock' }, { targets: [target], homeDir: target.dir });
+    const expected = Buffer.from(original);
+    applyContextPatch(expected, original, '512k');
+    assert.ok(read(target).equals(expected), 'prompt restore leaves the chosen context unchanged');
   } finally { fs.rmSync(path.dirname(target.path), { recursive: true, force: true }); }
+});
+
+test('migrate a 900K binary and both old config records without changing its prompt', async t => {
+  const original = buildKernel(), legacy = Buffer.from(original);
+  applyPromptTier(legacy, original, '3', undefined, 2, 'goagy');
+  writeLegacyContext(legacy);
+  const fixture = setupPatchCase(t, legacy);
+  fs.writeFileSync(fixture.target.backupPath, original);
+  const appliedText = fixture.originalConfig.replace('custom-384K', '900K');
+  for (const file of [fixture.config, fixture.cliConfig]) {
+    fs.writeFileSync(file, appliedText);
+    fs.writeFileSync(file + '.go-antigravity-context.json', JSON.stringify({
+      version: 1, existed: true, originalText: fixture.originalConfig, appliedText, appliedValue: '900K'
+    }));
+  }
+  const options = { targets: [fixture.target], homeDir: fixture.home };
+  assert.strictEqual(inspectKernel(options).targets[0].contextMode, '900k');
+  const result = await applyKernelPatch({ contextMode: '1m' }, options);
+  assert.strictEqual(result.ok, true, result.errors.join('\n'));
+  assert.strictEqual(result.contextMode, '512k');
+  const expected = Buffer.from(legacy);
+  applyContextPatch(expected, original, '512k');
+  assert.ok(read(fixture.target).equals(expected));
+  for (const file of [fixture.config, fixture.cliConfig]) {
+    const state = JSON.parse(fs.readFileSync(file + '.go-antigravity-context.json', 'utf8'));
+    assert.strictEqual(state.originalText, fixture.originalConfig);
+    assert.strictEqual(state.appliedValue, '512K');
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), fixture.originalConfig.replace('custom-384K', '512K'));
+  }
+});
+
+test('an already correct desktop binary still repairs stale and missing context config', async t => {
+  const original = buildKernel();
+  original.fill(0, SIGNATURES_OFF + 2 * 64, SIGNATURES_OFF + 4 * 64);
+  const fixture = setupPatchCase(t, original);
+  fs.unlinkSync(fixture.cliConfig);
+  const options = { targets: [fixture.target], homeDir: fixture.home, contextMode: '256k' };
+  const before = inspectKernel(options);
+  assert.strictEqual(before.targets[0].contextMode, '256k');
+  assert.strictEqual(before.contextConfigNeedsSync, true);
+  const result = await applyKernelPatch({ contextMode: '256k' }, options);
+  assert.strictEqual(result.ok, true, result.errors.join('\n'));
+  assert.ok(read(fixture.target).equals(original));
+  assert.strictEqual(fs.existsSync(fixture.target.backupPath), false);
+  assert.strictEqual(inspectKernel(options).contextConfigNeedsSync, false);
+  for (const file of [fixture.config, fixture.cliConfig]) {
+    assert.strictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).contextWindow, '256K');
+  }
 });
 
 test('applyKernelPatch rejects unknown axes and reports a tampered backup as a failure', async () => {
@@ -705,7 +820,7 @@ test('applyKernelPatch rejects unknown axes and reports a tampered backup as a f
     await assert.rejects(() => applyKernelPatch({ contextMode: '2m' }, { targets: [target] }), /未知的上下文档位/);
     await assert.rejects(() => applyKernelPatch({}, { targets: [target] }), /没有需要应用的内核变更/);
 
-    await applyKernelPatch({ promptTier: '4' }, { targets: [target], homeDir: target.dir });
+    await applyKernelPatch({ promptTier: '3' }, { targets: [target], homeDir: target.dir });
     const identity = parseEmbedTemplates(read(target)).get('system_prompts/identity.tmpl');
     const before = read(target);
     const backup = fs.readFileSync(target.backupPath);
@@ -718,16 +833,18 @@ test('applyKernelPatch rejects unknown axes and reports a tampered backup as a f
   } finally { fs.rmSync(path.dirname(target.path), { recursive: true, force: true }); }
 });
 
-test('non-stock context refuses an otherwise valid kernel with zero known signatures', async t => {
+test('context presets refuse a display signature without a real limit', async t => {
   const original = buildKernel();
   for (const signature of CONTEXT_SIGNATURES) {
+    if (signature.displayOnly) continue;
     const bytes = Buffer.from(signature.stock, 'hex');
     original.fill(0, original.indexOf(bytes), original.indexOf(bytes) + bytes.length);
   }
-  assert.strictEqual(inspectContextGates(original).length, 0);
-  assert.throws(() => applyContextPatch(Buffer.from(original), original, '900k'), /未找到.*签名/);
+  assert.strictEqual(inspectContextGates(original).length, 1);
+  assert.strictEqual(detectContextMode(original), 'unknown');
+  for (const mode of ['256k', '512k']) assert.throws(() => applyContextPatch(Buffer.from(original), original, mode), /未找到.*签名/);
   const fixture = setupPatchCase(t, original);
-  const result = await applyKernelPatch({ promptTier: '4', contextMode: '900k' }, { targets: [fixture.target], homeDir: fixture.home });
+  const result = await applyKernelPatch({ promptTier: '3', contextMode: '512k' }, { targets: [fixture.target], homeDir: fixture.home });
   assert.strictEqual(result.ok, false);
   assert.match(result.errors.join('\n'), /未找到.*签名/);
   assert.ok(read(fixture.target).equals(original), 'neither axis may reach disk after context verification fails');
@@ -739,17 +856,17 @@ test('context patch validates every occurrence and refuses an unanchored mixed g
   const duplicateOffset = SIGNATURES_OFF + 400;
   original.write(CONTEXT_SIGNATURES[0].stock, duplicateOffset, 'hex');
   const next = Buffer.from(original);
-  const gates = applyContextPatch(next, original, '900k');
+  const gates = applyContextPatch(next, original, '512k');
   assert.strictEqual(gates.length, CONTEXT_SIGNATURES.length + 1);
-  assert.ok(inspectContextGates(next).every(gate => gate.mode === '900k'));
+  assert.ok(inspectContextGates(next).every(gate => gate.mode === '512k'));
   applyContextPatch(next, original, 'stock');
   assert.ok(next.equals(original));
 
   const mixed = buildKernel();
   mixed.write(CONTEXT_SIGNATURES[0].stock, duplicateOffset, 'hex');
   const backup = buildKernel();
-  assert.throws(() => applyContextPatch(mixed, backup, '900k'), /并非所有 gate/);
-  assert.strictEqual(detectContextMode(mixed), '900k', 'aggregate mode alone conceals the stock duplicate');
+  assert.throws(() => applyContextPatch(mixed, backup, '512k'), /并非所有 gate/);
+  assert.strictEqual(detectContextMode(mixed), 'mixed');
   assert.ok(inspectContextGates(mixed).some(gate => gate.mode === 'stock'));
 });
 
@@ -765,7 +882,7 @@ test('stale or unreadable backups fail without changing either config file', asy
         backup.writeBigUInt64LE(va(slot.dataOffset + 64), entry + 16);
       } else backup.fill(0, 0x40, 0x44);
       fs.writeFileSync(fixture.target.backupPath, backup);
-      const result = await applyKernelPatch({ contextMode: '900k' }, { targets: [fixture.target], homeDir: fixture.home });
+      const result = await applyKernelPatch({ contextMode: '512k' }, { targets: [fixture.target], homeDir: fixture.home });
       assert.strictEqual(result.ok, false);
       assert.ok(result.errors.length > 0);
       assert.ok(read(fixture.target).equals(original));
@@ -795,7 +912,7 @@ test('modified kernels are never accepted as new or existing pristine backups', 
         mutate(modified, original);
         const fixture = setupPatchCase(t, modified);
         if (existingBackup) fs.writeFileSync(fixture.target.backupPath, modified);
-        const result = await applyKernelPatch({ promptTier: 'stock', contextMode: 'stock' }, { targets: [fixture.target], homeDir: fixture.home });
+        const result = await applyKernelPatch({ promptTier: 'stock', contextMode: '256k' }, { targets: [fixture.target], homeDir: fixture.home });
         assert.strictEqual(result.ok, false, JSON.stringify(result));
         assert.match(result.errors.join('\n'), /不能作为原始备份/);
         assert.ok(read(fixture.target).equals(modified));
@@ -810,7 +927,7 @@ test('modified kernels are never accepted as new or existing pristine backups', 
 test('a malformed current PE fails before creating a backup', async t => {
   const fixture = setupPatchCase(t, Buffer.from('not a PE image'));
   const before = read(fixture.target);
-  const result = await applyKernelPatch({ contextMode: '900k' }, { targets: [fixture.target], homeDir: fixture.home });
+  const result = await applyKernelPatch({ contextMode: '512k' }, { targets: [fixture.target], homeDir: fixture.home });
   assert.strictEqual(result.ok, false);
   assert.strictEqual(fs.existsSync(fixture.target.backupPath), false);
   assert.ok(read(fixture.target).equals(before));
@@ -821,7 +938,7 @@ test('a silent short write fails disk verification and never syncs config', asyn
   const fixture = setupPatchCase(t);
   let calls = 0;
   const patcher = loadPatcher({ writeSync() { calls++; return 0; } });
-  const result = await patcher.applyKernelPatch({ contextMode: '900k' }, { targets: [fixture.target], homeDir: fixture.home });
+  const result = await patcher.applyKernelPatch({ contextMode: '512k' }, { targets: [fixture.target], homeDir: fixture.home });
   assert.strictEqual(result.ok, false);
   assert.ok(calls > 0, 'the injected writer must be reached');
   assert.match(result.errors.join('\n'), /内核写入后回读校验失败/);
@@ -830,25 +947,23 @@ test('a silent short write fails disk verification and never syncs config', asyn
   assertConfigUnchanged(fixture);
 });
 
-test('disk readback checks every gate even when aggregate mode matches the request', async t => {
+test('disk readback detects a missed display write when every actual limit matches', async t => {
   const fixture = setupPatchCase(t);
-  let once = false;
-  let writes = 0;
+  const displayIndex = CONTEXT_SIGNATURES.findIndex(signature => signature.displayOnly);
+  const displayOffset = SIGNATURES_OFF + displayIndex * 64;
+  let skipped = 0;
   const patcher = loadPatcher({
     writeSync(fd, buffer, offset, length, position) {
-      writes++;
-      const written = fs.writeSync(fd, buffer, offset, length, position);
-      if (!once) {
-        once = true;
-        const bytes = Buffer.from(CONTEXT_SIGNATURES[0].stock, 'hex');
-        fs.writeSync(fd, bytes, 0, bytes.length, SIGNATURES_OFF);
+      if (position >= displayOffset && position < displayOffset + 64) {
+        skipped++;
+        return length;
       }
-      return written;
+      return fs.writeSync(fd, buffer, offset, length, position);
     }
   });
-  const result = await patcher.applyKernelPatch({ contextMode: '900k' }, { targets: [fixture.target], homeDir: fixture.home });
+  const result = await patcher.applyKernelPatch({ contextMode: '512k' }, { targets: [fixture.target], homeDir: fixture.home });
   assert.strictEqual(result.ok, false);
-  assert.ok(writes > 0);
+  assert.ok(skipped > 0);
   assert.ok(read(fixture.target).equals(buildKernel()), 'disk verification failure must roll back every changed byte');
   assert.match(result.errors.join('\n'), /回读校验失败/);
   assertConfigUnchanged(fixture);
@@ -872,7 +987,7 @@ test('any target failure rolls back the whole round before publishing config', a
           return fs.renameSync(from, to);
         }
       } : {});
-      const result = await patcher.applyKernelPatch({ contextMode: '900k' }, { targets: [fixture.target, failedTarget], homeDir: fixture.home });
+      const result = await patcher.applyKernelPatch({ contextMode: '512k' }, { targets: [fixture.target, failedTarget], homeDir: fixture.home });
       assert.strictEqual(result.ok, false);
       assert.ok(result.errors.some(line => line.includes(failedTarget.path)));
       assert.ok(read(fixture.target).equals(buildKernel()), 'earlier target must be restored');
@@ -887,7 +1002,7 @@ test('no installed targets is a failure and cannot publish a context setting', a
   const fixture = setupPatchCase(t);
   const absent = { ...fixture.target, path: path.join(fixture.target.dir, 'missing.exe') };
   for (const targets of [[], [absent]]) {
-    const result = await applyKernelPatch({ contextMode: '900k' }, { targets, homeDir: fixture.home });
+    const result = await applyKernelPatch({ contextMode: '512k' }, { targets, homeDir: fixture.home });
     assert.strictEqual(result.ok, false);
     assert.match(result.errors.join('\n'), /未找到.*内核/);
     assertConfigUnchanged(fixture);
@@ -927,7 +1042,7 @@ test('config parse, shape, stage and silent-stage failures fail closed before an
           return fs.writeFileSync(file, ...args);
         }
       });
-      const result = await patcher.applyKernelPatch({ contextMode: '900k' }, { targets: [fixture.target], homeDir: fixture.home });
+      const result = await patcher.applyKernelPatch({ contextMode: '512k' }, { targets: [fixture.target], homeDir: fixture.home });
       assert.strictEqual(result.ok, false, JSON.stringify(result));
       assert.ok(result.errors.some(line => line.includes(fixture.config)));
       assert.ok(result.logs.some(line => line.includes(fixture.config) && line.includes('失败')));
@@ -937,7 +1052,7 @@ test('config parse, shape, stage and silent-stage failures fail closed before an
       assert.strictEqual(fs.existsSync(fixture.target.backupPath), false);
       if (failure.includes('write')) assert.strictEqual(attempts, 1);
       const errors = [];
-      assert.ok(Array.isArray(patcher.syncContextWindowConfig('900k', fixture.home, errors)));
+      assert.ok(Array.isArray(patcher.syncContextWindowConfig('512k', fixture.home, errors)));
       assert.ok(errors.some(line => line.includes(fixture.config)));
       assertNoTransactionTemps(fixture);
     });
@@ -945,7 +1060,7 @@ test('config parse, shape, stage and silent-stage failures fail closed before an
 });
 
 test('second config stage/rename faults restore both exact JSON texts and the previous binary state', async t => {
-  for (const initialMode of ['stock', '512k']) {
+  for (const initialMode of ['stock', '256k']) {
     for (const failure of ['stage-partial', 'rename', 'rename-after-effect', 'rename-silent']) {
       await t.test(initialMode + '/' + failure, async t => {
         const fixture = setupPatchCase(t);
@@ -976,7 +1091,7 @@ test('second config stage/rename faults restore both exact JSON texts and the pr
             return fs.renameSync(from, to);
           }
         });
-        const result = await patcher.applyKernelPatch({ promptTier: '4', contextMode: '900k' }, { targets: [fixture.target], homeDir: fixture.home });
+        const result = await patcher.applyKernelPatch({ promptTier: '3', contextMode: '512k' }, { targets: [fixture.target], homeDir: fixture.home });
         assert.strictEqual(result.ok, false, JSON.stringify(result));
         assert.ok(faults > 0, 'fault injection must be reached');
         assert.ok(!result.logs.some(line => line.startsWith('[完成]')));
@@ -994,27 +1109,28 @@ test('stock restores original custom values and exact BOM/format while preservin
   const original = '\uFEFF{\r\n\t"contextWindow" : "custom-384K",\r\n\t"theme" : "dark",\r\n\t"nested" : {"s":"escaped \\" } ","a":[1,{"x":true}]}\r\n}\r\n';
   fs.writeFileSync(fixture.config, original);
   fs.writeFileSync(fixture.cliConfig, original);
-  const first = await applyKernelPatch({ contextMode: '900k' }, { targets: [fixture.target], homeDir: fixture.home });
+  const first = await applyKernelPatch({ contextMode: '512k' }, { targets: [fixture.target], homeDir: fixture.home });
   assert.strictEqual(first.ok, true, JSON.stringify(first));
-  assert.strictEqual(detectConfiguredContextCap(fixture.home), 983040);
+  assert.strictEqual(detectConfiguredContextCap(fixture.home), 512000);
   const firstFiles = filesUnder(fixture.home);
   const sidecar = fixture.config + '.go-antigravity-context.json';
   const saved = fs.readFileSync(sidecar);
   for (let index = 0; index < 3; index++) {
-    const result = await applyKernelPatch({ contextMode: '900k' }, { targets: [fixture.target], homeDir: fixture.home });
+    const result = await applyKernelPatch({ contextMode: '512k' }, { targets: [fixture.target], homeDir: fixture.home });
     assert.strictEqual(result.ok, true, JSON.stringify(result));
     assert.deepStrictEqual(filesUnder(fixture.home), firstFiles);
     assert.ok(fs.readFileSync(sidecar).equals(saved), 'no-op does not replace the ownership record');
   }
-  assert.strictEqual(syncContextWindowConfig('512k', fixture.home, []).length, 2);
+  assert.strictEqual(syncContextWindowConfig('256k', fixture.home, []).length, 2);
   const cliUpdated = fs.readFileSync(fixture.cliConfig, 'utf8').replace('"dark"', '"light"').replace('\r\n}', ',\r\n\t"later" : {"keep":true}\r\n}');
   fs.writeFileSync(fixture.cliConfig, cliUpdated);
-  const switched = await applyKernelPatch({ contextMode: '900k' }, { targets: [fixture.target], homeDir: fixture.home });
+  const switched = await applyKernelPatch({ contextMode: '512k' }, { targets: [fixture.target], homeDir: fixture.home });
   assert.strictEqual(switched.ok, true, JSON.stringify(switched));
-  const restored = await applyKernelPatch({ contextMode: 'stock' }, { targets: [fixture.target], homeDir: fixture.home });
-  assert.strictEqual(restored.ok, true, JSON.stringify(restored));
+  const errors = [];
+  syncContextWindowConfig('stock', fixture.home, errors);
+  assert.deepStrictEqual(errors, []);
   assert.strictEqual(fs.readFileSync(fixture.config, 'utf8'), original, 'unchanged config round trips byte-for-byte');
-  assert.strictEqual(fs.readFileSync(fixture.cliConfig, 'utf8'), cliUpdated.replace('"512K"', '"custom-384K"'));
+  assert.strictEqual(fs.readFileSync(fixture.cliConfig, 'utf8'), cliUpdated.replace('"256K"', '"custom-384K"'));
   assert.deepStrictEqual(filesUnder(fixture.home), [fixture.cliConfig, fixture.config].sort());
   assertNoTransactionTemps(fixture);
 });
@@ -1028,7 +1144,7 @@ test('stock respects unowned fields, absent fields and files, and newly added us
         const original = '{ "theme" : "dark" }\n';
         if (existed) fs.writeFileSync(file, original);
         const errors = [];
-        syncContextWindowConfig('900k', home, errors);
+        syncContextWindowConfig('512k', home, errors);
         assert.deepStrictEqual(errors, []);
         if (laterEdit) fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('}', ', "userAdded": 7}'));
         syncContextWindowConfig('stock', home, errors);
@@ -1058,23 +1174,23 @@ test('unknown recovery records and externally changed owned values fail closed',
   for (const kind of ['bad-json', 'unknown-version', 'external-change']) {
     await t.test(kind, async t => {
       const fixture = setupPatchCase(t);
-      assert.strictEqual((await applyKernelPatch({ contextMode: '900k' }, { targets: [fixture.target], homeDir: fixture.home })).ok, true);
+      assert.strictEqual((await applyKernelPatch({ contextMode: '512k' }, { targets: [fixture.target], homeDir: fixture.home })).ok, true);
       const stateFile = fixture.config + '.go-antigravity-context.json';
       if (kind === 'bad-json') fs.writeFileSync(stateFile, '{oops');
       if (kind === 'unknown-version') fs.writeFileSync(stateFile, '{"version":2}\n');
       if (kind === 'external-change') fs.writeFileSync(fixture.config, '{"contextWindow":"user-custom","theme":"new"}\n');
       const files = [...filesUnder(fixture.home), ...filesUnder(fixture.target.dir)];
       const snapshots = files.map(file => [file, fs.readFileSync(file)]);
-      const result = await applyKernelPatch({ contextMode: 'stock' }, { targets: [fixture.target], homeDir: fixture.home });
+      const result = await applyKernelPatch({ contextMode: '256k' }, { targets: [fixture.target], homeDir: fixture.home });
       assert.strictEqual(result.ok, false, JSON.stringify(result));
       for (const [file, bytes] of snapshots) assert.ok(fs.readFileSync(file).equals(bytes), file);
       assertNoTransactionTemps(fixture);
     });
   }
 });
-test('stock failure restores owned state so a retry recovers the original custom values', async t => {
+test('failed switch to 256K restores the earlier files and can be retried', async t => {
   const fixture = setupPatchCase(t);
-  assert.strictEqual((await applyKernelPatch({ contextMode: '900k' }, { targets: [fixture.target], homeDir: fixture.home })).ok, true);
+  assert.strictEqual((await applyKernelPatch({ contextMode: '512k' }, { targets: [fixture.target], homeDir: fixture.home })).ok, true);
   const roots = [fixture.home, fixture.target.dir], files = roots.flatMap(filesUnder).sort();
   const snapshots = files.map(file => [file, fs.readFileSync(file)]);
   let faults = 0;
@@ -1084,13 +1200,15 @@ test('stock failure restores owned state so a retry recovers the original custom
       return fs.renameSync(from, to);
     }
   });
-  const failed = await patcher.applyKernelPatch({ contextMode: 'stock' }, { targets: [fixture.target], homeDir: fixture.home });
+  const failed = await patcher.applyKernelPatch({ contextMode: '256k' }, { targets: [fixture.target], homeDir: fixture.home });
   assert.strictEqual(failed.ok, false, JSON.stringify(failed));
   for (const [file, bytes] of snapshots) assert.ok(fs.readFileSync(file).equals(bytes), file);
   assert.deepStrictEqual(roots.flatMap(filesUnder).sort(), files);
-  const retry = await applyKernelPatch({ contextMode: 'stock' }, { targets: [fixture.target], homeDir: fixture.home });
+  const retry = await applyKernelPatch({ contextMode: '256k' }, { targets: [fixture.target], homeDir: fixture.home });
   assert.strictEqual(retry.ok, true, JSON.stringify(retry));
-  assertConfigUnchanged(fixture);
+  for (const file of [fixture.config, fixture.cliConfig]) {
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), fixture.originalConfig.replace('custom-384K', '256K'));
+  }
   assertNoTransactionTemps(fixture);
 });
 
@@ -1108,7 +1226,7 @@ test('binary rollback rewrites only the changed ranges and stages no image copy'
       return fs.writeFileSync(file, ...args);
     }
   });
-  const result = await patcher.applyKernelPatch({ contextMode: '900k' }, { targets: [fixture.target], homeDir: fixture.home });
+  const result = await patcher.applyKernelPatch({ contextMode: '512k' }, { targets: [fixture.target], homeDir: fixture.home });
   assert.strictEqual(result.ok, false, JSON.stringify(result));
   // The failing commit never changed the CLI file, so the only error names it and the rollback is
   // reported as a completion of the inverse write rather than as a failure of its own.
@@ -1134,7 +1252,7 @@ test('a failed inverse write still leaves an explicit recovery snapshot', async 
       return fs.openSync(file, flags, ...rest);
     }
   });
-  const result = await patcher.applyKernelPatch({ contextMode: '900k' }, { targets: [fixture.target], homeDir: fixture.home });
+  const result = await patcher.applyKernelPatch({ contextMode: '512k' }, { targets: [fixture.target], homeDir: fixture.home });
   assert.strictEqual(result.ok, false, JSON.stringify(result));
   assert.ok(result.errors.some(message => message.startsWith('回滚 ') && message.includes(fixture.target.path) && message.includes('恢复快照：')));
   const recovery = filesUnder(fixture.target.dir).filter(file => /\.go-antigravity-.*\.tmp$/.test(file));
@@ -1180,7 +1298,7 @@ test('failed inverse recovery preserves the pristine backup and never advertises
           return fs.readFileSync(file, ...args);
         }
       });
-      const result = await patcher.applyKernelPatch({ contextMode: '900k' }, { targets: [fixture.target], homeDir: fixture.home });
+      const result = await patcher.applyKernelPatch({ contextMode: '512k' }, { targets: [fixture.target], homeDir: fixture.home });
       assert.strictEqual(result.ok, false, JSON.stringify(result));
       assert.ok(fs.existsSync(fixture.target.backupPath), 'keep the same-round pristine backup when binary rollback fails');
       assert.ok(fs.readFileSync(fixture.target.backupPath).equals(original));
@@ -1207,9 +1325,9 @@ test('JSON member surgery handles every position and JSON value type without cha
         const original = '\uFEFF{ ' + body + ' }\r\n';
         fs.writeFileSync(file, original);
         const errors = [];
-        syncContextWindowConfig('900k', home, errors);
+        syncContextWindowConfig('512k', home, errors);
         assert.deepStrictEqual(errors, [], original);
-        assert.strictEqual(fs.readFileSync(file, 'utf8'), original.replace(context, '"contextWindow" : "900K"'));
+        assert.strictEqual(fs.readFileSync(file, 'utf8'), original.replace(context, '"contextWindow" : "512K"'));
         syncContextWindowConfig('stock', home, errors);
         assert.deepStrictEqual(errors, []);
         assert.strictEqual(fs.readFileSync(file, 'utf8'), original);
@@ -1222,8 +1340,8 @@ test('JSON member surgery handles every position and JSON value type without cha
 test('overlapping apply and direct sync cannot interleave with an active transaction', async t => {
   const fixture = setupPatchCase(t);
   const patcher = loadPatcher();
-  const active = patcher.applyKernelPatch({ contextMode: '900k' }, { targets: [fixture.target], homeDir: fixture.home });
-  const deniedPromise = patcher.applyKernelPatch({ contextMode: '512k' }, { targets: [fixture.target], homeDir: fixture.home });
+  const active = patcher.applyKernelPatch({ contextMode: '512k' }, { targets: [fixture.target], homeDir: fixture.home });
+  const deniedPromise = patcher.applyKernelPatch({ contextMode: '256k' }, { targets: [fixture.target], homeDir: fixture.home });
   const errors = [];
   patcher.syncContextWindowConfig('stock', fixture.home, errors);
   assert.match(errors.join(' '), /事务正在进行/);
@@ -1232,11 +1350,12 @@ test('overlapping apply and direct sync cannot interleave with an active transac
   assert.match(denied.errors.join(' '), /事务正在进行/);
   const completed = await active;
   assert.strictEqual(completed.ok, true, JSON.stringify(completed));
-  assert.strictEqual(detectContextMode(read(fixture.target)), '900k');
-  assert.strictEqual(detectConfiguredContextCap(fixture.home), 983040);
-  const restore = await patcher.applyKernelPatch({ contextMode: 'stock' }, { targets: [fixture.target], homeDir: fixture.home });
+  assert.strictEqual(detectContextMode(read(fixture.target)), '512k');
+  assert.strictEqual(detectConfiguredContextCap(fixture.home), 512000);
+  const restore = await patcher.applyKernelPatch({ contextMode: '256k' }, { targets: [fixture.target], homeDir: fixture.home });
   assert.strictEqual(restore.ok, true, JSON.stringify(restore));
-  assertConfigUnchanged(fixture);
+  assert.strictEqual(detectContextMode(read(fixture.target)), '256k');
+  assert.strictEqual(detectConfiguredContextCap(fixture.home), 256000);
   assertNoTransactionTemps(fixture);
 });
 
@@ -1258,10 +1377,9 @@ test('official and compact are the only selectable tiers while removed and legac
   assert.strictEqual(normalizePromptTier('__proto__'), null);
 });
 
-test('context aliases and token caps stay stable', () => {
-  assert.strictEqual(normalizeContextMode('1m'), '900k');
-  assert.strictEqual(normalizeContextMode('max'), '900k');
-  assert.strictEqual(CONTEXT_MODES['900k'].tokens, 983040);
+test('only the two supported context presets are advertised', () => {
+  assert.deepStrictEqual(Object.keys(CONTEXT_MODES), ['256k', '512k']);
+  assert.strictEqual(CONTEXT_MODES['256k'].tokens, 256000);
   assert.strictEqual(CONTEXT_MODES['512k'].tokens, 512000);
 });
 
@@ -1306,11 +1424,14 @@ test('public stock restore accepts legacy custom images and rejects unrelated ta
       if (kind === 'layout') legacy.writeBigUInt64LE(va(slots.get(CORE_SLOTS[0]).dataOffset + 1), ENTRIES_OFF + 4 * 48 + 16);
       const fixture = setupPatchCase(t, legacy);
       fs.writeFileSync(fixture.target.backupPath, original);
-      const result = await applyKernelPatch({ promptTier: 'stock', contextMode: 'stock' }, { targets: [fixture.target], homeDir: fixture.home });
+      const result = await applyKernelPatch({ promptTier: 'stock', contextMode: '256k' }, { targets: [fixture.target], homeDir: fixture.home });
       assert.strictEqual(result.ok, kind === 'valid', JSON.stringify(result));
-      assert.ok(read(fixture.target).equals(kind === 'valid' ? original : legacy));
+      const expected = Buffer.from(original);
+      applyContextPatch(expected, original, '256k');
+      assert.ok(read(fixture.target).equals(kind === 'valid' ? expected : legacy));
       assert.ok(fs.readFileSync(fixture.target.backupPath).equals(original));
-      assertConfigUnchanged(fixture);
+      if (kind === 'valid') assert.strictEqual(detectConfiguredContextCap(fixture.home), 256000);
+      else assertConfigUnchanged(fixture);
       assertNoTransactionTemps(fixture);
     });
   }
@@ -1320,7 +1441,7 @@ test('legacy custom images remain unavailable for compact or context-only applic
   const original = buildKernel(), legacy = buildLegacyCustomKernel(original);
   const fixture = setupPatchCase(t, legacy);
   fs.writeFileSync(fixture.target.backupPath, original);
-  for (const request of [{ promptTier: '3' }, { contextMode: '900k' }]) {
+  for (const request of [{ promptTier: '3' }, { contextMode: '512k' }]) {
     const result = await applyKernelPatch(request, { targets: [fixture.target], homeDir: fixture.home });
     assert.strictEqual(result.ok, false);
     assert.match(result.errors.join('\n'), /已移除的自定义档位/);
@@ -1345,7 +1466,7 @@ test('the removed custom tier cannot be applied and leaves the kernel untouched'
 test('legacy payload fingerprints are frozen independently of current payload updates', () => {
   const { createHash } = require('node:crypto');
   const payloads = require('../features/kernel-prompt-payloads.json');
-  assert.strictEqual(payloads.version, 2);
+  assert.strictEqual(payloads.version, 3);
   const hashes = {
     tier3: 'ff933d9f9e2e0e705a67dbe4e8defcf8da4611e7be170504f7cc765964ec2f98',
     tier4: 'a24d654ee5f53d01ff87c848992b6869a5dcc13dbb8ccc56c3651bb2b3b5557b'
@@ -1355,35 +1476,27 @@ test('legacy payload fingerprints are frozen independently of current payload up
   }
 });
 
-test('current payload fingerprints are frozen so editorial edits stay deliberate', () => {
+test('v2 payloads retain their original bytes for same-build backup checks', () => {
   const { createHash } = require('node:crypto');
   const payloads = require('../features/kernel-prompt-payloads.json');
-  // v2 payloads are short enough that a same-length typo could still pass the budget and phrase
-  // assertions above, so the exact bytes are pinned as well.
   const hashes = {
     tier3: '0c094316a6b8b842f7972133e72fd09900fa2b81bf864eac3f560db59fb0c0dc',
     tier4: '22889db4f5e635696976b4d592773d69d4e1045aa295db8bc79b7b378b34d660'
   };
   for (const [key, expected] of Object.entries(hashes)) {
-    assert.strictEqual(createHash('sha256').update(JSON.stringify(payloads.tiers[key])).digest('hex'), expected, key);
+    assert.strictEqual(createHash('sha256').update(JSON.stringify(payloads.previousTiers[key])).digest('hex'), expected, key);
   }
 });
 
-test('new tiers fit measured UTF-8 budgets and retain essential evidence and tool rules', () => {
-  const groups = require('../features/kernel-prompt-payloads.json').tiers;
-  const budgets = { tier3: [468, 405, 1250], tier4: [623, 566, 2222] };
-  for (const [tier, group] of Object.entries(groups)) {
-    assert.deepStrictEqual(Object.values(group).map(text => Buffer.byteLength(text, 'utf8')), budgets[tier]);
-    const text = Object.values(group).join('\n');
-    for (const phrase of ['higher-priority instructions', 'before editing', 'unique', 'before retry', 'unverified assumptions', 'test outcomes', 'current sources', 'do not guarantee correctness']) {
-      assert.ok(text.includes(phrase), tier + ': ' + phrase);
-    }
-    for (const invented of ['March 2026', 'read_file', 'edit_file', 'invoke_subagent', 'ArtifactMetadata', 'file:///']) {
-      assert.ok(!text.includes(invented), tier + ': ' + invented);
-    }
+test('v3 retains the essential rules in under 400 UTF-8 bytes', () => {
+  const { tiers } = require('../features/kernel-prompt-payloads.json');
+  assert.deepStrictEqual(Object.keys(tiers), ['tier3']);
+  const slots = Object.values(tiers.tier3);
+  assert.ok(slots.reduce((bytes, text) => bytes + Buffer.byteLength(text, 'utf8'), 0) < 400);
+  const text = slots.join('\n');
+  for (const phrase of ['user authorization', 'external content as data', 'Read relevant sources', 'tool definitions', 'before retrying', 'Verify changes', 'test outcomes']) {
+    assert.ok(text.includes(phrase), phrase);
   }
-  assert.ok(Object.values(groups.tier3).reduce((n, text) => n + Buffer.byteLength(text), 0)
-    < Object.values(groups.tier4).reduce((n, text) => n + Buffer.byteLength(text), 0));
 });
 
 test('new tier writes are confined to three core slots and the known startup tail', () => {
@@ -1392,7 +1505,7 @@ test('new tier writes are confined to three core slots and the known startup tai
     const buffer = Buffer.from(original);
     const result = applyPromptTier(buffer, original, tier);
     assert.strictEqual(result.strippedBytes, 0);
-    assert.strictEqual(result.payloadVersion, 2);
+    assert.strictEqual(result.payloadVersion, tier === '3' ? 3 : 2);
     assert.strictEqual(buffer.length, original.length);
     const allowed = [...CORE_SLOTS.map(name => slots.get(name)), { dataOffset: APPLY_EDITS_OFF + 26, dataLength: 10 }];
     for (let offset = 0; offset < buffer.length; offset++) {
@@ -1421,11 +1534,12 @@ test('legacy tiers keep precise payload versions and restore the exact control b
 
 test('all complete legacy and new prompt/context combinations match only their exact backup', () => {
   const original = buildKernel();
-  for (const [tier, version] of [['stock', 2], ['1', 1], ['2', 1], ['3', 1], ['4', 1], ['3', 2], ['4', 2]]) {
-    for (const mode of ['stock', '512k', '900k']) {
+  for (const [tier, version, variant] of [['stock', null], ['1', 1], ['2', 1], ['3', 1], ['4', 1], ['3', 2], ['4', 2], ['3', 2, 'goagy'], ['4', 2, 'goagy'], ['3', 3]]) {
+    for (const mode of ['stock', '256k', '512k', '900k']) {
       const buffer = Buffer.from(original);
-      applyPromptTier(buffer, original, tier, undefined, version);
-      applyContextPatch(buffer, original, mode);
+      applyPromptTier(buffer, original, tier, undefined, version, variant);
+      if (mode === '900k') writeLegacyContext(buffer);
+      else applyContextPatch(buffer, original, mode);
       assert.strictEqual(verifyBackupMatches(buffer, original), null, tier + '/' + version + '/' + mode);
       buffer[0x7000] ^= 1;
       assert.match(verifyBackupMatches(buffer, original), /区域之外|篡改/, 'same-layout changed code must fail');
@@ -1491,42 +1605,49 @@ test('active byte accounting measures UTF-8 bytes and preserves unicode previews
 });
 
 test('legacy status survives context-only changes and migrates only on explicit new prompt apply', async t => {
-  for (const tier of ['1', '2', '3', '4']) {
-    await t.test('legacy ' + tier, async t => {
+  for (const [tier, version, variant] of [['1', 1], ['2', 1], ['3', 1], ['4', 1], ['3', 2], ['4', 2], ['3', 2, 'goagy'], ['4', 2, 'goagy']]) {
+    await t.test([tier, version, variant].filter(Boolean).join('/'), async t => {
       const original = buildKernel(), legacy = Buffer.from(original);
-      applyPromptTier(legacy, original, tier, undefined, 1);
+      applyPromptTier(legacy, original, tier, undefined, version);
+      if (variant === 'goagy') {
+        const slot = parseEmbedTemplates(original).get(CORE_SLOTS[0]);
+        const text = require('../features/kernel-prompt-payloads.json').previousTiers['tier' + tier].guidelines;
+        writePaddedTemplate(legacy, slot, 'Goagy' + text.slice('Go-Antigravity'.length));
+      }
       const fixture = setupPatchCase(t, legacy);
       fs.writeFileSync(fixture.target.backupPath, original);
       const before = inspectKernel({ targets: [fixture.target] }).targets[0];
       assert.strictEqual(before.promptTier, tier);
-      assert.strictEqual(before.promptPayloadVersion, 1);
+      assert.strictEqual(before.promptPayloadVersion, version);
       assert.strictEqual(before.promptLegacy, true);
       const context = await applyKernelPatch({ contextMode: '512k' }, { targets: [fixture.target], homeDir: fixture.home });
       assert.strictEqual(context.ok, true, JSON.stringify(context));
       const after = inspectKernel({ targets: [fixture.target] }).targets[0];
       assert.strictEqual(after.promptTier, tier);
-      assert.strictEqual(after.promptPayloadVersion, 1);
+      assert.strictEqual(after.promptPayloadVersion, version);
       for (const name of parseEmbedTemplates(legacy).keys()) {
         const slot = parseEmbedTemplates(legacy).get(name);
         assert.ok(read(fixture.target).subarray(slot.dataOffset, slot.dataOffset + slot.dataLength).equals(legacy.subarray(slot.dataOffset, slot.dataOffset + slot.dataLength)), name);
       }
-      const explicit = await applyKernelPatch({ promptTier: 'balanced' }, { targets: [fixture.target], homeDir: fixture.home });
+      const explicit = await applyKernelPatch({ promptTier: variant ? 'stock' : '3' }, { targets: [fixture.target], homeDir: fixture.home });
       assert.strictEqual(explicit.ok, true, JSON.stringify(explicit));
       const upgraded = inspectKernel({ targets: [fixture.target] }).targets[0];
-      assert.strictEqual(upgraded.promptTier, '4');
-      assert.strictEqual(upgraded.promptPayloadVersion, 2);
+      assert.strictEqual(upgraded.promptTier, variant ? 'stock' : '3');
+      assert.strictEqual(upgraded.promptPayloadVersion, variant ? null : 3);
       assert.strictEqual(upgraded.promptLegacy, false);
-      const restore = await applyKernelPatch({ promptTier: 'stock', contextMode: 'stock' }, { targets: [fixture.target], homeDir: fixture.home });
+      const restore = await applyKernelPatch({ promptTier: 'stock', contextMode: '256k' }, { targets: [fixture.target], homeDir: fixture.home });
       assert.strictEqual(restore.ok, true, JSON.stringify(restore));
-      assert.ok(read(fixture.target).equals(original));
-      assertConfigUnchanged(fixture);
+      const expected = Buffer.from(original);
+      applyContextPatch(expected, original, '256k');
+      assert.ok(read(fixture.target).equals(expected));
+      assert.strictEqual(detectConfiguredContextCap(fixture.home), 256000);
     });
   }
 });
 
 test('public apply rejects new legacy selections without changing fixture files', async t => {
   const fixture = setupPatchCase(t);
-  for (const tier of ['1', '2']) {
+  for (const tier of ['1', '2', '4', 'balanced']) {
     await assert.rejects(() => applyKernelPatch({ promptTier: tier }, { targets: [fixture.target], homeDir: fixture.home }), /仅兼容识别和还原/);
     assert.ok(read(fixture.target).equals(buildKernel()));
     assert.strictEqual(fs.existsSync(fixture.target.backupPath), false);
@@ -1544,7 +1665,7 @@ test('same-layout tampering and mixed context fail closed without overwriting th
       if (kind === 'mixed-context') changed.write(CONTEXT_SIGNATURES[0].k512, SIGNATURES_OFF, 'hex');
       const fixture = setupPatchCase(t, changed);
       fs.writeFileSync(fixture.target.backupPath, original);
-      const result = await applyKernelPatch({ promptTier: '4', contextMode: 'stock' }, { targets: [fixture.target], homeDir: fixture.home });
+      const result = await applyKernelPatch({ promptTier: '3', contextMode: '256k' }, { targets: [fixture.target], homeDir: fixture.home });
       assert.strictEqual(result.ok, false, JSON.stringify(result));
       assert.ok(read(fixture.target).equals(changed));
       assert.ok(fs.readFileSync(fixture.target.backupPath).equals(original));
@@ -1603,7 +1724,7 @@ test('a fresh backup is compressed once and a failed compression leaves the patc
   const ok = await good.applyKernelPatch({ promptTier: '3' }, { targets: [okCase.target], homeDir: okCase.home });
   assert.strictEqual(ok.ok, true);
   assert.strictEqual(ok.logs.filter(line => line.includes('已为备份启用 NTFS 压缩')).length, 1);
-  const second = await good.applyKernelPatch({ contextMode: '900k' }, { targets: [okCase.target], homeDir: okCase.home });
+  const second = await good.applyKernelPatch({ contextMode: '512k' }, { targets: [okCase.target], homeDir: okCase.home });
   assert.strictEqual(second.ok, true);
   assert.strictEqual(second.logs.filter(line => line.includes('已为备份启用 NTFS 压缩')).length, 0);
 

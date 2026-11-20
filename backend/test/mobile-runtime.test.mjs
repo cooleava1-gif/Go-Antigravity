@@ -156,11 +156,14 @@ test('concurrent unfinished login bodies enforce five failures per IP and reset 
  clock.advance(60000);await loginCookie(base);
  assert.equal((await http(base,'/pocket-login',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'token=incorrect'})).status,401);
 });
-test('concurrent forwarded IPs share the global hundred-failure limit and recover after one minute',async(t)=>{
+test('each forwarded IP keeps an independent five-failure budget with no cross-source lockout',async(t)=>{
  const clock=fakeSessionClock(),runtime=createMobileServer({pin:'12345678',adapter:{},now:clock.now,sessionTimers:clock.timers}),base=await listen(runtime.server);t.after(()=>runtime.close());
+ // 120 distinct sources: each source's own first five guesses fail with 401, later ones 429.
+ // No source can exhaust another source's budget, and 120 failures do not trip a global cap.
  const statuses=await concurrentLogins(runtime,base,120,i=>({'cf-connecting-ip':'192.0.2.'+(i+1)}));
- assert.equal(statuses.filter(s=>s===401).length,100);assert.equal(statuses.filter(s=>s===429).length,20);
- assert.equal((await http(base,'/pocket-login',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded','cf-connecting-ip':'198.51.100.1'},body:'token=12345678'})).status,429);
+ assert.equal(statuses.filter(s=>s===401).length,120);assert.equal(statuses.filter(s=>s===429).length,0);
+ // A brand-new source with the correct PIN is unaffected by the 120 failures from other sources.
+ assert.equal((await http(base,'/pocket-login',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded','cf-connecting-ip':'198.51.100.1'},body:'token=12345678'})).status,302);
  clock.advance(60000);await loginCookie(base);
 });
 test('malformed login bodies consume failures while cross-site, unsupported and oversized bodies keep their status',async(t)=>{

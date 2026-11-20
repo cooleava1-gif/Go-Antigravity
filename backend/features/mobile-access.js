@@ -7,7 +7,10 @@ const net = require('node:net');
 const path = require('node:path');
 const { URL } = require('node:url');
 const LOCAL_URL = 'http://127.0.0.1:3082/';
-const TUNNEL_READY = 'http://127.0.0.1:20382/ready';
+// The connector's metrics port is chosen at launch and reported in the validated tunnelReady
+// line; never probe a hardcoded port another service may be holding.
+const metricsReadyUrl = port => (Number.isSafeInteger(port) && port > 0 && port <= 65535
+  ? 'http://127.0.0.1:' + port + '/ready' : null);
 const PROJECT_DIR = path.resolve(__dirname, '../mobile');
 const QUICK_URL = /^https:\/\/(?!api\.)[a-z0-9-]+\.trycloudflare\.com$(?![\s\S])/;
 // Supervisor allows 30s origin + 90s connector/public readiness, plus manager margin.
@@ -58,7 +61,7 @@ function createMobileAccess({ events, settings, secrets, testMode = false, proje
       tunnelTokenConfigured: credentials.configured, fixedAuth: credentials.available ? 'token' :
         (!credentials.configured && process.env.GO_ANTIGRAVITY_MOBILE_CF_CONFIG ? 'config' : null),
       publicUrl, startupPhase: owned?.phase || null,
-      localUrl: LOCAL_URL, pin, autoStart: autoStart(),
+      localUrl: LOCAL_URL, metricsPort: owned?.metricsPort ?? null, pin, autoStart: autoStart(),
       managed: Boolean(owned?.child), lastError, startedAt, available: available() };
   }
   function assertConfigMutable() {
@@ -111,7 +114,7 @@ function createMobileAccess({ events, settings, secrets, testMode = false, proje
     finally { clearTimeout(timer); parentSignal?.removeEventListener('abort', onAbort); }
   }
   function portOccupied(signal, port = 3082) {
-    if (testMode || fetchImpl) return fetchStatus(port === 3082 ? LOCAL_URL : TUNNEL_READY, signal).then(value => value !== null);
+    if (testMode || fetchImpl) return fetchStatus(port === 3082 ? LOCAL_URL : metricsReadyUrl(port), signal).then(value => value !== null);
     return new Promise(resolve => {
       if (signal?.aborted) { resolve(false); return; }
       let socket, timer, done = false;
@@ -146,8 +149,9 @@ function createMobileAccess({ events, settings, secrets, testMode = false, proje
     externalTimer.unref?.();
   }
   async function healthy(op) {
+    const url = metricsReadyUrl(op.metricsPort);
     const [local, tunnel] = await Promise.all([
-      fetchStatus(LOCAL_URL, op.controller.signal), fetchStatus(TUNNEL_READY, op.controller.signal),
+      fetchStatus(LOCAL_URL, op.controller.signal), url ? fetchStatus(url, op.controller.signal) : Promise.resolve(null),
     ]);
     return Boolean(local?.ok && tunnel?.ok);
   }
@@ -160,7 +164,7 @@ function createMobileAccess({ events, settings, secrets, testMode = false, proje
       // Do not taskkill an exited PID: Windows may already have reused it.
       // A handled wrapper exit is recoverable only when both listeners and its known origin are gone.
       if (op.exited) {
-        const [local, tunnel] = await Promise.all([portOccupied(), portOccupied(undefined, 20382)]);
+        const [local, tunnel] = await Promise.all([portOccupied(), op.metricsPort ? portOccupied(undefined, op.metricsPort) : Promise.resolve(false)]);
         if (local || tunnel) return false;
         if (op.serverPid) {
           try { process.kill(op.serverPid, 0); return false; }
@@ -305,6 +309,11 @@ function createMobileAccess({ events, settings, secrets, testMode = false, proje
         if (value.mode !== op.config.mode || value.local !== LOCAL_URL || !validUrl) {
           void fail(op, '手机服务返回了异常的就绪信息。'); return;
         }
+        // A recovery line may rotate the metrics port; it must be valid or the line is rejected.
+        if (!Number.isSafeInteger(value.metricsPort) || value.metricsPort <= 0 || value.metricsPort > 65535) {
+          void fail(op, '手机服务返回了异常的就绪信息。'); return;
+        }
+        op.metricsPort = value.metricsPort;
         if (op.running) void recovered(op, value.publicUrl, op.generation);
         else op.recoveredUrl = value.publicUrl;
         continue;
@@ -312,7 +321,13 @@ function createMobileAccess({ events, settings, secrets, testMode = false, proje
       op.readySeen = true;
       if (value.mode !== op.config.mode || value.local !== LOCAL_URL || !validUrl) {
         op.resolveReady('手机服务返回了异常的就绪信息。'); return;
-      } else { op.tunnelAccepted = true; op.publicUrl = value.publicUrl; op.resolveReady(null); }
+      } else {
+        if (!Number.isSafeInteger(value.metricsPort) || value.metricsPort <= 0 || value.metricsPort > 65535) {
+          op.readySeen = true; op.resolveReady('手机服务返回了异常的就绪信息。'); return;
+        }
+        op.tunnelAccepted = true; op.publicUrl = value.publicUrl; op.metricsPort = value.metricsPort;
+        op.resolveReady(null);
+      }
     }
   }
   async function launch(op) {

@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import QApplication
 from backend_client import BackendClient
 from runtime import BackendRuntime
 from ui import MainWindow
+from update_ui import STARTUP_CHECK_DELAY_MS
 
 
 def demo_snapshot():
@@ -25,8 +26,8 @@ def demo_snapshot():
         "cdpSockets": 0,
         "kernel": {
             "platformSupported": True,
-            "desired": {"promptTier": "3", "contextMode": "512k"},
-            "targets": [{"exists": True, "backupExists": True, "promptTier": "3", "contextMode": "512k"}],
+            "desired": {"promptTier": "stock", "contextMode": "256k"},
+            "targets": [{"exists": True, "backupExists": True, "promptTier": "stock", "contextMode": "256k"}],
         },
         "proxy": {
             "enabled": True,
@@ -99,17 +100,38 @@ def demo_snapshot():
 def demo_logs():
     return [
         {"at": "2026-11-16T01:23:00Z", "category": "SYSTEM", "message": "桌面工作区已准备就绪"},
-        {"at": "2026-11-16T01:23:04Z", "category": "KERNEL", "message": "检测到本机内核 · 4 档提示词 + 512K 上下文 (.bak 校验通过)"},
+        {"at": "2026-11-16T01:23:04Z", "category": "KERNEL", "message": "检测到本机内核 · 官方原版提示词 + 256K 上下文"},
         {"at": "2026-11-16T01:23:06Z", "category": "PROXY", "message": "代理连接检测通过 · 203.0.113.8 (示例区域 · 286 ms)"},
         {"at": "2026-11-16T01:23:08Z", "category": "SYSTEM", "message": "界面预览 · 使用演示数据"},
     ]
 
 
-def main():
+def parse_arguments(argv=None):
     parser = argparse.ArgumentParser(description="Go-Antigravity native desktop")
     parser.add_argument("--demo", action="store_true", help="Preview only, no backend or account access")
     parser.add_argument("--quit-after", type=int, default=0, help="Close demo after milliseconds (QA only)")
-    args = parser.parse_args()
+    parser.add_argument(
+        "--data-dir",
+        default="",
+        help="Backend data directory (absolute or relative); set before the runtime and updater start",
+    )
+    return parser.parse_args(argv)
+
+
+def apply_data_dir(data_dir: str | None) -> None:
+    """Pin the backend data directory before the runtime and the updater read it.
+
+    The packaged install lives in LOCALAPPDATA, so the desktop shortcut passes
+    --data-dir pointing at the original repo's .go-antigravity-data; nothing is copied
+    and no account data moves.
+    """
+    if data_dir:
+        os.environ["GO_ANTIGRAVITY_DATA_DIR"] = str(Path(data_dir).expanduser().resolve())
+
+
+def main():
+    args = parse_arguments()
+    apply_data_dir(args.data_dir)
     if sys.platform == "win32":
         import ctypes
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("GoAntigravity.Desktop")
@@ -146,16 +168,19 @@ def main():
             window.inform(message + "；可关闭窗口后重新启动。")
 
         runtime.failed.connect(failed)
-        runtime.closed.connect(lambda: app.quit() if window._closing else None)
+        runtime.closed.connect(lambda: app.quit() if (window._closing or getattr(window, "_exit_requested", False)) else None)
         window.closing.connect(closing)
         QTimer.singleShot(0, runtime.start)
+        # At most one background update check per launch; failures only leave a status.
+        QTimer.singleShot(STARTUP_CHECK_DELAY_MS, window.update_controller.startup_check)
     window.show()
     ready_file = os.environ.pop("GO_ANTIGRAVITY_QT_READY_FILE", None)
     if ready_file:
         # The bootstrap owns the directory. A timed-out launch cannot recreate it later.
         QTimer.singleShot(0, lambda: Path(ready_file).touch(exist_ok=False))
     if args.demo and args.quit_after > 0:
-        QTimer.singleShot(args.quit_after, window.close)
+        # 托盘驻留时 close() 只隐藏：QA 定时退出必须走显式退出路径。
+        QTimer.singleShot(args.quit_after, window.request_exit)
     return app.exec()
 
 

@@ -605,7 +605,7 @@ class AccountCardWidget(GlassCard):
         elif account.get("status") == "expired":
             st_text, st_role = "令牌失效", "PillRed"
         elif is_live:
-            st_text, st_role = "当前生效", "PillGreen"
+            st_text, st_role = "客户端账户", "PillGreen"
         elif is_active:
             st_text, st_role = "启动账户", "PillInfo"
         elif account.get("status") == "pending":

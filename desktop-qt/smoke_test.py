@@ -108,8 +108,8 @@ def main():
     check(isinstance(w.tier, SegmentedControl) and isinstance(w.context, SegmentedControl),
           "kernel tier and context use Liquid Glass SegmentedControl")
     check([key for _, key in w.tier._items] == ["stock", "3"], "visible prompt tier keys")
-    check([key for _, key in w.context._items] == ["stock", "512k", "900k"], "context mode keys")
-    check("1M" in w.context._items[2][0], "900K / 1M context label")
+    check(w.context._items == [("256K（默认）", "256k"), ("512K", "512k")], "two context presets")
+    check(w.tier.currentData() == "stock" and w.context.currentData() == "256k", "kernel defaults")
     check(isinstance(w.preflight, ToggleSwitch) and isinstance(w.i18n, ToggleSwitch),
           "settings switches use ToggleSwitch")
 
@@ -168,12 +168,14 @@ def main():
 
     w.confirm = lambda *args: False
     before = len(fake.calls)
+    QTest.mouseClick(w.context._buttons[1], Qt.MouseButton.LeftButton)
     w.apply_kernel()
     check(len(fake.calls) == before, "cancelled kernel confirmation never mutates")
     w.confirm = lambda *args: True
     w.apply_kernel(restore=True)
-    check(fake.calls[-1][2] == {"promptTier": "stock", "contextMode": "stock"}, "restore exact kernel axes")
-    fake.error.emit("kernel-apply", "模拟取消")
+    check(fake.calls[-1][2] == {"promptTier": "stock", "contextMode": "256k"}, "restore exact kernel axes")
+    fake.finish("kernel-apply", {"ok": True, "kernel": demo_snapshot()["kernel"]})
+    check(w.context.currentData() == "256k", "successful restore clears the context edit")
 
     # Accounts: cards, inline quota bars, search, quota sort, OAuth URL validation.
     w.navigate(1)

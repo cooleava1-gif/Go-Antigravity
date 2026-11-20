@@ -7,6 +7,14 @@ const assets=new Map([['/mobile/messages.js',['messages.js','text/javascript; ch
 export function json(res,status,value){res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'});res.end(JSON.stringify(value));}
 async function body(req){let n=0;const chunks=[];for await(const c of req){n+=c.length;if(n>65536)throw new PocketError('消息过长（最大 64KB）',413);chunks.push(c);}try{const value=JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}');if(!value||typeof value!=='object'||Array.isArray(value))throw Error();return value;}catch{throw new PocketError('JSON 请求无效',400);}}
 function message(v){if(typeof v!=='string'||!v.trim())throw new PocketError('请输入消息',400);if(v.length>24000)throw new PocketError('消息过长（最多 24000 字符）',413);return v.trim();}
+function trustedOrigin(req){
+ const value=req.headers.origin;
+ if(value===undefined)return true;
+ try{const source=new URL(value);
+  if(source.origin!==value||source.host!==String(req.headers.host||'').toLowerCase())return false;
+  return source.protocol==='https:'||(source.protocol==='http:'&&['127.0.0.1','[::1]','localhost'].includes(source.hostname));
+ }catch{return false;}
+}
 export function createHandler({adapter=new DesktopAdapter(),authorize=()=>false}={}){
  const hub=new EventHub(adapter);
  const handler=async function handler(req,res){
@@ -26,6 +34,9 @@ export function createHandler({adapter=new DesktopAdapter(),authorize=()=>false}
    }
    if(req.method==='POST'){
     if(req.headers['x-go-antigravity-mobile']!=='1')throw new PocketError('缺少请求校验头',403);
+    // Same-origin check for compat writes: a supplied Origin must match this host (loopback
+    // http or tunnel https); a missing Origin stays allowed for local non-browser clients.
+    if(!trustedOrigin(req))throw new PocketError('请求来源不受信任',403);
     if(!String(req.headers['content-type']||'').startsWith('application/json'))throw new PocketError('需要 JSON 请求',415);
     const v=await body(req);
     if(path==='/mobile/api/sessions')return json(res,200,await adapter.create(message(v.text),v.requestId,v.modelId));

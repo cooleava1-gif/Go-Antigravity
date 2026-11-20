@@ -21,19 +21,21 @@ const { createApi } = require('./api');
 const { LanguageService } = require('../adapters/desktop/language-service');
 const { ContextMonitor } = require('../features/context-monitor');
 const { createSourceGuard } = require('../features/source-guard');
-const { inspectKernel, applyKernelPatch, CONTEXT_MODES, PROMPT_TIERS, CONTEXT_SIGNATURES } = require('../features/kernel-patch');
+const { inspectKernel, applyKernelPatch, contextModeFromGates, resolveTargets, languageServerRunning, CONTEXT_MODES, PROMPT_TIERS, payloads } = require('../features/kernel-patch');
 const { probeProxy } = require('../features/proxy-probe');
 const { createAgLogWatcher } = require('../features/ag-log-watch');
 const { createMobileAccess } = require('../features/mobile-access');
 const { createMobileSecrets, credentialError } = require('../core/mobile-secrets');
 
-async function createApplication({ rootDir, dataDir, readyFile, native = false, testMode = false, mobileVault, agCred, agQuota, agUsage, kernelInspector = inspectKernel, kernelPatcher = applyKernelPatch, openUrl = openInBrowser, onClose = () => {} }) {
+async function createApplication({ rootDir, dataDir, readyFile, native = false, testMode = false, mobileVault, agCred, agQuota, agUsage, kernelInspector = inspectKernel, kernelPatcher = applyKernelPatch, kernelProcessProbe = null, openUrl = openInBrowser, onClose = () => {} }) {
   fs.mkdirSync(dataDir, { recursive: true });
   const canonicalDataDir = fs.realpathSync.native(dataDir);
   const scopedPath = process.platform === 'win32' ? canonicalDataDir.replaceAll('\\', '/').toLowerCase() : canonicalDataDir;
   const dataDirectoryId = createHash('sha256').update(scopedPath).digest('hex');
   const events = new Events(dataDir);
-  const settings = createSettings(path.join(dataDir, 'settings.json'));
+  // A corrupted settings file must not fall back to defaults in silence: the loader reports
+  // the fallback here, and every line reaches the UI console and the on-disk log.
+  const settings = createSettings(path.join(dataDir, 'settings.json'), { log: (message, cls) => events.log('SYSTEM', message, cls) });
   const agcred = agCred || createAgCred({ scriptPath: path.join(rootDir, 'tools', 'agcred.ps1') });
   // Account tokens are sealed at rest with a master key that lives in Windows Credential
   // Manager, so the key has to be read (one PowerShell spawn) before the pool is loaded.
@@ -120,13 +122,18 @@ async function createApplication({ rootDir, dataDir, readyFile, native = false, 
   let kernelResult = null;
   let kernelInspection = null;
   const readKernelInspection = (refresh = true) => {
-    if (refresh || !kernelInspection) kernelInspection = kernelInspector();
+    if (refresh || !kernelInspection) kernelInspection = kernelInspector({ contextMode: settings.get().contextMode });
     return kernelInspection;
   };
   const runKernelPatch = async input => {
     try { return await kernelPatcher(input); }
     finally { kernelInspection = null; }
   };
+  // A manual patch must never race a live language server, so it first asks the patcher's own
+  // same-user + exact-path probe about the very images this apply would rewrite. Test mode never
+  // spawns PowerShell, mirroring how desktop.running is stubbed there.
+  const kernelRunning = kernelProcessProbe || (testMode ? async () => false : languageServerRunning);
+  const kernelTargetPaths = () => resolveTargets().map(target => target.path);
   let proxyResult = null;
   // The last probe outcome is cached in memory only: re-probing on every SSE tick would open a
   // tunnel to Google three times a second for a badge that changes once per launch.
@@ -223,19 +230,18 @@ async function createApplication({ rootDir, dataDir, readyFile, native = false, 
       let inspection = readKernelInspection();
       const existing = inspection.targets.filter(target => target.exists);
       const automatic = {};
-      // A numeric legacy preference is not consent to replace it with a new payload.
-      // Context-only recovery must also leave every legacy prompt byte untouched.
       const savedSettings = settings.get();
-      const allowPrompt = savedSettings.promptPayloadVersion === 2
-        && ['stock', '3', '4'].includes(desired.promptTier)
-        && !existing.some(target => target.promptLegacy || target.promptPayloadVersion === 1);
-      // A fresh default must not silently replace an already selected non-stock payload: automatic
-      // migration is limited to pristine/unknown targets and the current desired tier.
-      const promptMigrationAllowed = existing.every(target => !target.promptTier || target.promptTier === 'stock' || target.promptTier === desired.promptTier);
-      if (allowPrompt && promptMigrationAllowed && existing.some(target => target.promptTier !== desired.promptTier)) {
+      // Apply a previously selected v3 payload to a clean replacement kernel. An older
+      // preference or installed payload requires an explicit prompt action in the UI.
+      if (desired.promptTier === '3' && savedSettings.promptPayloadVersion === payloads.version
+        && existing.some(target => target.promptTier === 'stock')
+        && existing.every(target => !target.error && !target.promptLegacy && (target.promptTier === 'stock'
+          || (target.promptTier === '3' && target.promptPayloadVersion === payloads.version)))) {
         automatic.promptTier = desired.promptTier;
       }
-      if (existing.some(target => target.contextMode !== desired.contextMode)) automatic.contextMode = desired.contextMode;
+      if (inspection.contextConfigNeedsSync || existing.some(target => target.contextMode !== desired.contextMode)) {
+        automatic.contextMode = desired.contextMode;
+      }
       if (settings.get().autoApplyKernelPatch && Object.keys(automatic).length) {
         events.log('SYSTEM', '检测到内核设置变化，正在同步已确认的选项', 'tag-proxy');
         const result = await runKernelPatch(automatic);
@@ -250,11 +256,8 @@ async function createApplication({ rootDir, dataDir, readyFile, native = false, 
         events.publish({ kernel: app.kernelStatus({ refresh: false }) });
       }
       const target = inspection.targets.find(item => item.id === 'desktop' && item.exists && !item.error);
-      // CLI/Desktop/IDE builds contain different subsets of these signatures. Trust only
-      // the gates actually recognized in this build, all agreeing on the same mode.
-      if (target && target.gates?.length > 0
-        && target.gates.every(gate => gate.mode === target.contextMode
-          && CONTEXT_SIGNATURES.some(signature => signature.id === gate.id))) {
+      // Only actual checkpoint limits can override the host context ring.
+      if (target && contextModeFromGates(target.gates) === target.contextMode) {
         pendingContextCap = CONTEXT_MODES[target.contextMode]?.tokens || 0;
       }
       await applyStartupAccount();
@@ -289,21 +292,46 @@ async function createApplication({ rootDir, dataDir, readyFile, native = false, 
   const oauthFlows = createFlowStore();
   const oauthRedirectUri = () => `http://127.0.0.1:${app.apiPort}${CALLBACK_PATH}`;
 
+  function publishClientLogin(credential) {
+    liveReadRevision += 1;
+    live.refreshToken = credential?.refreshToken || null;
+    live.at = Date.now();
+    events.publish({ accounts: accounts.snapshot(live.refreshToken) });
+  }
+
   // Session calls this only after proving AG is closed and completing its launch checks.
-  // A selected card must become the system login before the new process can read it.
+  // A saved account is a fallback unless the user explicitly chose it for startup.
   async function applyStartupAccount() {
     const account = accounts.active();
     if (!account) return;
-    if (account.locked) throw new Error('启动账户的本地令牌无法解密，请先重新授权');
+    const startupId = accounts.startup()?.id;
     const captured = captureCredential(account);
     const originalTokens = captured.tokens;
     const assertSelected = () => {
       if (session.closed || session.phase !== 'launching') throw new Error('启动已取消');
-      if (accounts.active()?.id !== account.id || !credentialMatches(captured)) {
+      if (accounts.active()?.id !== account.id || accounts.startup()?.id !== startupId || !credentialMatches(captured)) {
         throw new Error('启动账户已改变，已取消启动，请重试');
       }
     };
+    const keepClientLogin = credential => {
+      if (startupId || !credential?.refreshToken) return false;
+      publishClientLogin(credential);
+      events.log('SYSTEM', '启动时沿用 Antigravity 客户端已有的登录', 'tag-proxy');
+      return true;
+    };
     assertSelected();
+    if (!startupId) {
+      let credential;
+      try { credential = await agcred.readSystemCredential(); }
+      catch {
+        assertSelected();
+        events.log('SYSTEM', '暂时无法读取本机登录，交由 Antigravity 处理', 'tag-warn');
+        return;
+      }
+      assertSelected();
+      if (keepClientLogin(credential)) return;
+    }
+    if (account.locked) throw new Error('启动账户的本地令牌无法解密，请先重新授权');
     let fresh;
     try {
       fresh = await agcred.ensureFresh({ ...account }, settings.get().port, { publicOnly: true });
@@ -320,6 +348,8 @@ async function createApplication({ rootDir, dataDir, readyFile, native = false, 
     assertSelected();
     const previous = await agcred.readSystemCredential();
     assertSelected();
+    // An official login may have appeared while the fallback was being refreshed.
+    if (keepClientLogin(previous)) return;
     const changed = ['accessToken', 'refreshToken', 'expiryTs'].some(key => previous?.[key] !== fresh[key]);
     let persistenceAttempted = false;
     try {
@@ -337,10 +367,7 @@ async function createApplication({ rootDir, dataDir, readyFile, native = false, 
       }
       throw new Error('写入启动账户凭据失败，已取消启动' + (restored ? '并恢复原凭据' : '；请检查 AG 登录状态') + '：' + error.message);
     }
-    liveReadRevision += 1;
-    live.refreshToken = fresh.refreshToken;
-    live.at = Date.now();
-    events.publish({ accounts: accounts.snapshot(live.refreshToken) });
+    publishClientLogin(fresh);
   }
 
   async function resolveProfile(accessToken, proxyPort) {
@@ -416,6 +443,19 @@ async function createApplication({ rootDir, dataDir, readyFile, native = false, 
       if (incoming.promptTier !== undefined) request.promptTier = incoming.promptTier;
       if (incoming.contextMode !== undefined) request.contextMode = incoming.contextMode;
       if (!explicitAxes) request.contextMode = current.contextMode;
+      // A manual patch while the target language server still holds the image would rename-replace
+      // the file under a live process: the write succeeds, the running AG keeps serving the old
+      // image until it restarts, and the UI would report "已写入" for a change that is not in
+      // effect. Refuse instead, and leave both the kernel and the saved preference untouched.
+      let kernelBusy;
+      try { kernelBusy = await kernelRunning(kernelTargetPaths()); }
+      catch {
+        throw Object.assign(new Error('无法确认 Antigravity 是否已退出，已取消内核应用；请先完全退出 Antigravity 后重试'), { status: 409, code: 'ag_state_unknown' });
+      }
+      if (kernelBusy) {
+        events.log('KERNEL', 'Antigravity 仍在运行，已取消手动内核应用', 'tag-warn');
+        throw Object.assign(new Error('Antigravity 仍在运行，已取消内核应用；请先完全退出 Antigravity（包括语言服务器）后重试，当前内核与设置均未改动'), { status: 409, code: 'ag_running' });
+      }
       const result = await runKernelPatch(request);
       for (const line of result.logs) events.log('KERNEL', line, result.ok ? 'tag-proxy' : 'tag-warn');
       for (const line of result.errors) events.log('KERNEL', line, 'tag-alert');
@@ -425,7 +465,7 @@ async function createApplication({ rootDir, dataDir, readyFile, native = false, 
         const saved = {};
         if (result.promptTier != null) saved.promptTier = result.promptTier;
         if (result.contextMode != null) saved.contextMode = result.contextMode;
-        if (incoming.promptTier !== undefined && result.promptTier != null) saved.promptPayloadVersion = 2;
+        if (incoming.promptTier !== undefined && result.promptTier != null) saved.promptPayloadVersion = payloads.version;
         await app.configure(saved);
       } else {
         events.publish({ kernel: app.kernelStatus() });
@@ -457,7 +497,7 @@ async function createApplication({ rootDir, dataDir, readyFile, native = false, 
         if (!account) throw new Error('账户不存在');
         if (account.locked) throw new Error('该账户的本地令牌无法解密，请点「重新授权」重新登录');
         const captured = captureCredential(account);
-        const previousActiveId = accounts.snapshot().activeId;
+        const { activeId: previousActiveId, startupId: previousStartupId } = accounts.snapshot();
         const assertCurrent = () => {
           assertCredential(captured);
           if (session.closed || accounts.snapshot().activeId !== previousActiveId
@@ -516,13 +556,15 @@ async function createApplication({ rootDir, dataDir, readyFile, native = false, 
           finally { if (accounts.find(id)) persisted = captureCredential(accounts.find(id)); }
           accounts.markSwitched(id);
           accounts.markStatus(id, { status: 'ok', error: null });
-          accounts.select(id);
+          // Switching changes the client's login now. Only "Set for startup"
+          // opts into replacing any future login.
+          accounts.select(id, { startupId: previousStartupId });
         } catch (error) {
           if (persisted && credentialMatches(persisted)) {
             const restoreSelection = accounts.snapshot().activeId === id;
             try { accounts.restoreTokens(id, captured.tokens); } catch { /* report original error */ }
             if (restoreSelection && previousActiveId && previousActiveId !== id) {
-              try { accounts.select(previousActiveId); } catch { /* previous account may be gone */ }
+              try { accounts.select(previousActiveId, { startupId: previousStartupId }); } catch { /* previous account may be gone */ }
             }
           }
           let restored = false;

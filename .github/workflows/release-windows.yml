@@ -45,9 +45,67 @@ jobs:
           .\.venv-qt\Scripts\python.exe -m pip install --disable-pip-version-check -r desktop-qt/requirements.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Resolve release version
+        id: release
+        shell: pwsh
+        run: |
+          $package = Get-Content -LiteralPath 'backend/package.json' -Raw | ConvertFrom-Json
+          $packageVersion = [string]$package.version
+          if ($packageVersion -notmatch '^\d+\.\d+\.\d+([-+][0-9A-Za-z.\-]+)?$') {
+            throw "backend/package.json version '$packageVersion' is not a semantic version."
+          }
+          $expectedTag = 'v' + $packageVersion
+          $isTag = $env:GITHUB_REF -like 'refs/tags/*'
+          $tag = if ($isTag) { $env:GITHUB_REF -replace '^refs/tags/', '' } else { $expectedTag }
+          if ($isTag -and $tag -ne $expectedTag) {
+            throw "Tag '$tag' does not match backend/package.json version '$packageVersion'. The release tag must be '$expectedTag'."
+          }
+          "version=$packageVersion" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          Write-Host "Release version $packageVersion (tag $tag)"
+
       - name: Build Windows package
         shell: pwsh
-        run: .\scripts\package-windows.ps1 -OutputDirectory "$env:GITHUB_WORKSPACE\dist" -Clean
+        run: .\scripts\package-windows.ps1 -OutputDirectory "$env:GITHUB_WORKSPACE\dist" -Version "${{ steps.release.outputs.version }}" -Clean
+
+      - name: Verify delivered source in the package directory
+        shell: pwsh
+        run: .\scripts\verify-package-source.ps1 -PackagePath "$env:GITHUB_WORKSPACE\dist\Go-Antigravity-windows-x64"
+
+      - name: Verify delivered source in the release ZIP
+        shell: pwsh
+        run: .\scripts\verify-package-source.ps1 -PackagePath "$env:GITHUB_WORKSPACE\dist\Go-Antigravity-windows-x64.zip"
+
+      - name: Verify package manifest version and checksum sidecar
+        shell: pwsh
+        run: |
+          $expected = "${{ steps.release.outputs.version }}"
+          $zip = "$env:GITHUB_WORKSPACE\dist\Go-Antigravity-windows-x64.zip"
+          $checksum = "$zip.sha256"
+          foreach ($file in @($zip, $checksum)) {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Missing release file: $file" }
+          }
+          $bytes = [IO.File]::ReadAllBytes($checksum)
+          if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+            throw 'The checksum sidecar must not start with a BOM.'
+          }
+          $text = [Text.Encoding]::UTF8.GetString($bytes).Trim()
+          $match = [regex]::Match($text, '^([0-9a-fA-F]{64})  (.+)$')
+          if (-not $match.Success) { throw "The checksum sidecar is not a standard sha256sum line: $text" }
+          if ($match.Groups[2].Value.Trim() -ne (Split-Path -Leaf $zip)) { throw 'The checksum sidecar must name the release asset.' }
+          $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $match.Groups[1].Value.ToLowerInvariant()) { throw 'The checksum sidecar does not match the release ZIP.' }
+          $extract = Join-Path $env:RUNNER_TEMP 'release-manifest'
+          Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force
+          $manifestPath = Join-Path $extract 'Go-Antigravity-windows-x64/runtime/manifest.json'
+          if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw 'The release ZIP has no runtime/manifest.json.' }
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          if ([string]$manifest.version -ne $expected) {
+            throw "The packaged manifest version '$($manifest.version)' does not match the release version '$expected'."
+          }
+          if ([string]$manifest.update.repository -ne 'cooleava1-gif/Go-Antigravity') { throw 'The packaged manifest lost the update repository.' }
+          if ([string]$manifest.update.channel -ne 'stable') { throw 'The packaged manifest lost the stable update channel.' }
+          if ([string]$manifest.update.asset -ne 'Go-Antigravity-windows-x64.zip') { throw 'The packaged manifest lost the update asset name.' }
 
       - name: Smoke test Windows package
         shell: pwsh
@@ -57,7 +115,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Go-Antigravity-windows-x64
-          path: dist/Go-Antigravity-windows-x64.zip
+          path: |
+            dist/Go-Antigravity-windows-x64.zip
+            dist/Go-Antigravity-windows-x64.zip.sha256
           if-no-files-found: error
 
   publish:
@@ -70,8 +130,8 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: Go-Antigravity-windows-x64
-      - name: Publish verified ZIP
+      - name: Publish verified ZIP and checksum
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$env:GITHUB_REF_NAME" "Go-Antigravity-windows-x64.zip" --repo "$env:GITHUB_REPOSITORY" --verify-tag --generate-notes --title "Go-Antigravity $env:GITHUB_REF_NAME"
+        run: gh release create "$env:GITHUB_REF_NAME" "Go-Antigravity-windows-x64.zip" "Go-Antigravity-windows-x64.zip.sha256" --repo "$env:GITHUB_REPOSITORY" --verify-tag --generate-notes --title "Go-Antigravity $env:GITHUB_REF_NAME"

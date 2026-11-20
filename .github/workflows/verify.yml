@@ -82,6 +82,24 @@ jobs:
           }
           python -B desktop-qt/smoke_test.py --output "$env:RUNNER_TEMP/go-antigravity-qa"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify package source fingerprint, release manifest and updater install flow (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          foreach ($required in @('./scripts/package-source-tests.ps1', './scripts/update-install-tests.ps1')) {
+            if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Missing required test script: $required" }
+          }
+          ./scripts/package-source-tests.ps1
+          ./scripts/update-install-tests.ps1
+      - name: Verify package source fingerprint, release manifest and updater install flow (PowerShell 7)
+        shell: pwsh
+        run: |
+          foreach ($required in @('./scripts/package-source-tests.ps1', './scripts/update-install-tests.ps1')) {
+            if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Missing required test script: $required" }
+          }
+          pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/package-source-tests.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/update-install-tests.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build optional native launcher
         shell: pwsh
         run: ./desktop-qt/build-launcher.ps1

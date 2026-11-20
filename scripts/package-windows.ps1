@@ -13,6 +13,7 @@ $script:ProjectRoot = Split-Path -Parent $PSScriptRoot
 $script:PackageName = 'Go-Antigravity-windows-x64'
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $script:ProjectRoot 'dist' }
 . (Join-Path $PSScriptRoot 'package-rules.ps1')
+. (Join-Path $PSScriptRoot 'package-source.ps1')
 . (Join-Path $script:ProjectRoot 'Start-Go-Antigravity.ps1')
 
 function Fail([string]$Message) {
@@ -247,14 +248,6 @@ function Get-NpmCliPath([string]$NodePath) {
     Fail 'npm-cli.js was not found next to Node.js; install Node.js with npm.'
 }
 
-function Get-GitCommit {
-    $git = Resolve-CommandPath 'git.exe'
-    if (-not $git) { return 'unknown' }
-    $value = (& $git '-C' $script:ProjectRoot 'rev-parse' '--short' 'HEAD' 2>$null | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0 -or -not $value) { return 'unknown' }
-    return $value
-}
-
 function Get-PackageVersion {
     param([string]$Requested)
     if ($Requested) { return $Requested }
@@ -265,11 +258,12 @@ function Get-PackageVersion {
     return [string]$package.version
 }
 
-function Assert-SafeOutput([string]$OutputRoot, [string]$Stage, [string]$Zip) {
+function Assert-SafeOutput([string]$OutputRoot, [string]$Stage, [string]$Zip, [string]$Checksum) {
     $project = Get-FullPath $script:ProjectRoot
     if ((Get-FullPath $OutputRoot).TrimEnd('\') -eq $project.TrimEnd('\')) { Fail 'OutputDirectory cannot be the project root.' }
     if (-not (Test-PathInside $Stage $OutputRoot)) { Fail 'Stage directory escaped OutputDirectory.' }
     if (-not (Test-PathInside $Zip $OutputRoot)) { Fail 'ZIP path escaped OutputDirectory.' }
+    if ($Checksum -and -not (Test-PathInside $Checksum $OutputRoot)) { Fail 'Checksum path escaped OutputDirectory.' }
     if ((Get-FullPath $Stage).TrimEnd('\') -eq (Get-FullPath $OutputRoot).TrimEnd('\')) { Fail 'Stage directory must be a child of OutputDirectory.' }
 }
 
@@ -278,7 +272,9 @@ if (-not [Environment]::Is64BitOperatingSystem) { Fail 'A 64-bit Windows build h
 $outputRoot = if ([IO.Path]::IsPathRooted($OutputDirectory)) { Get-FullPath $OutputDirectory } else { Get-FullPath (Join-Path $script:ProjectRoot $OutputDirectory) }
 $stage = Join-Path $outputRoot $script:PackageName
 $zip = Join-Path $outputRoot ($script:PackageName + '.zip')
-Assert-SafeOutput $outputRoot $stage $zip
+# The checksum sidecar is a sibling of the ZIP and never part of the package directory.
+$checksumPath = $zip + '.sha256'
+Assert-SafeOutput $outputRoot $stage $zip $checksumPath
 
 if (Test-Path -LiteralPath $stage) {
     if (-not $Clean) { Fail "Output already exists: $stage. Use -Clean or another OutputDirectory." }
@@ -288,13 +284,19 @@ if (Test-Path -LiteralPath $zip) {
     if (-not $Clean) { Fail "Output already exists: $zip. Use -Clean or another OutputDirectory." }
     Remove-Item -LiteralPath $zip -Force
 }
+if (Test-Path -LiteralPath $checksumPath) {
+    if (-not $Clean) { Fail "Output already exists: $checksumPath. Use -Clean or another OutputDirectory." }
+    Remove-Item -LiteralPath $checksumPath -Force
+}
 New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
 
 $requiredFiles = @(
     'Start-Go-Antigravity.ps1', 'Start-Go-Antigravity.cmd', 'desktop-qt/build-launcher.ps1',
     'desktop-qt/launcher.cs', 'desktop-qt/main.py', 'desktop-qt/runtime.py',
     'desktop-qt/backend_client.py', 'desktop-qt/account_tools.py', 'desktop-qt/theme.py',
-    'desktop-qt/ui.py', 'desktop-qt/widgets.py', 'desktop-qt/assets/go-antigravity.ico',
+    'desktop-qt/ui.py', 'desktop-qt/widgets.py', 'desktop-qt/tray.py', 'desktop-qt/updater.py',
+    'desktop-qt/update_install.ps1', 'desktop-qt/update_ui.py',
+    'desktop-qt/assets/go-antigravity.ico',
     'backend/server.js', 'backend/package.json', 'backend/package-lock.json',
     'backend/NODE-LICENSE.txt', 'backend/THIRD-PARTY-NOTICES.md', 'LICENSE', 'PORTABLE.md'
 )
@@ -330,14 +332,18 @@ $stageRuntimeNode = Join-Path $stage 'runtime/node'
 $stageRuntimePython = Join-Path $stage 'runtime/python'
 New-Item -ItemType Directory -Path $stage,$stageBackend,$stageDesktop,$stageRuntimeNode,$stageRuntimePython -Force | Out-Null
 
+# The package version is the release identity: the launcher, the manifest and the
+# published tag all have to agree with backend/package.json.
+$packageVersion = Get-PackageVersion $Version
+
 Write-Host 'Building native launcher in the package...'
 $launcher = Join-Path $stage 'Go-Antigravity.exe'
 $powershell = Join-Path $env:WINDIR 'System32/WindowsPowerShell/v1.0/powershell.exe'
-Invoke-Native $powershell @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $script:ProjectRoot 'desktop-qt/build-launcher.ps1'), '-OutputPath', $launcher) 'native launcher build'
+Invoke-Native $powershell @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $script:ProjectRoot 'desktop-qt/build-launcher.ps1'), '-OutputPath', $launcher, '-Version', $packageVersion) 'native launcher build'
 Assert-File $launcher 'built Go-Antigravity.exe'
 Copy-FileSafe (Join-Path $script:ProjectRoot 'Start-Go-Antigravity.ps1') (Join-Path $stage 'Start-Go-Antigravity.ps1')
 Copy-FileSafe (Join-Path $script:ProjectRoot 'Start-Go-Antigravity.cmd') (Join-Path $stage 'Start-Go-Antigravity.cmd')
-foreach ($document in @('README.md', 'PORTABLE.md', 'LICENSE')) {
+foreach ($document in @('README.md', 'PORTABLE.md', 'LICENSE', 'MOBILE-ACCESS.md')) {
     Copy-FileSafe (Join-Path $script:ProjectRoot $document) (Join-Path $stage $document)
 }
 Copy-FileSafe (Join-Path $script:ProjectRoot 'backend/THIRD-PARTY-NOTICES.md') (Join-Path $stage 'THIRD-PARTY-NOTICES.md')
@@ -359,19 +365,18 @@ $npmCli = Get-NpmCliPath $node.Path
 Write-Host 'Installing production backend dependencies into the release package...'
 Invoke-Native $node.Path @($npmCli, 'ci', '--prefix', $stageBackend, '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund') 'production npm install'
 
-$packageVersion = Get-PackageVersion $Version
-$manifest = [ordered]@{
-    package = 'Go-Antigravity'
-    version = $packageVersion
-    platform = 'windows-x64'
-    commit = Get-GitCommit
-    builtAt = [DateTime]::UtcNow.ToString('o')
-    launcher = 'Go-Antigravity.exe'
-    dataDirectory = '%LOCALAPPDATA%\Go-Antigravity'
-    node = [ordered]@{ version = $node.Version; executable = 'runtime/node/node.exe' }
-    python = [ordered]@{ version = $preparedPython.Version; executable = 'runtime/python/pythonw.exe'; importPath = "runtime/python/python$($preparedPython.Major)$($preparedPython.Minor)._pth" }
-    backend = [ordered]@{ entry = 'backend/server.js'; dependencies = 'backend/node_modules' }
+# The source fingerprint covers exactly the delivered application source. It is computed
+# over the project tree and over the staged copy: a mismatch means the source changed
+# while the package was assembled, so the manifest could not describe this release.
+$sourceFingerprint = Get-PackageSourceFingerprint -Root $script:ProjectRoot
+$stagedFingerprint = Get-PackageSourceFingerprint -Root $stage
+if ($sourceFingerprint.Fingerprint -ne $stagedFingerprint.Fingerprint) {
+    Fail 'Delivered source changed while packaging; rebuild so the manifest matches the package.'
 }
+
+$gitState = Get-GitWorkingTreeState -ProjectRoot $script:ProjectRoot
+$manifest = New-PackageManifest -Stage $stage -Version $packageVersion -GitState $gitState -SourceFingerprint $sourceFingerprint `
+    -NodeVersion $node.Version -PythonVersion $preparedPython.Version -PythonMajor $preparedPython.Major -PythonMinor $preparedPython.Minor
 New-Item -ItemType Directory -Path (Join-Path $stage 'runtime') -Force | Out-Null
 $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $stage 'runtime/manifest.json') -Encoding UTF8
 
@@ -384,5 +389,13 @@ if ($forbidden) {
 Write-Host 'Creating ZIP archive...'
 Compress-Archive -Path $stage -DestinationPath $zip -CompressionLevel Optimal -Force
 Assert-File $zip 'release ZIP'
+
+# Standard sha256sum sidecar next to the ZIP. It is written outside the package
+# directory so it never enters the delivered-source fingerprint, and the desktop
+# updater downloads it from the same release to verify the update package.
+$checksumWritten = Write-PackageChecksum -Path $zip
+Assert-File $checksumWritten 'release ZIP checksum'
 Write-Host "Created $stage"
 Write-Host "Created $zip"
+Write-Host "Created $checksumWritten"
+Write-Host "Verify the delivered source fingerprint with: pwsh -File scripts/verify-package-source.ps1 -PackagePath `"$zip`""

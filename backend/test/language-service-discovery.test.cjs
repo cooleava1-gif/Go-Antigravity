@@ -4,8 +4,12 @@ const { discoverProcesses, serverFromDiscovery } = require('../adapters/desktop/
 
 test('Windows usage discovery matches the logged HTTP port to a listener of this process', async () => {
   const command = 'language_server.exe --standalone --csrf_token=fixture';
-  const execute = async file => {
-    if (file === 'powershell.exe') return { stdout: JSON.stringify({ ProcessId: 21, CommandLine: command }) };
+  const execute = async (file, args) => {
+    if (file === 'powershell.exe') {
+      assert.ok(args.at(-1).includes(String.raw`(^|\s)--standalone(\s|=|$)`),
+        'The PowerShell filter must receive the whitespace escapes');
+      return { stdout: JSON.stringify({ ProcessId: 21, CommandLine: command }) };
+    }
     assert.equal(file, 'netstat.exe');
     return { stdout: '  TCP  127.0.0.1:4100  0.0.0.0:0  LISTENING  21\r\n' +
       '  TCP  [::1]:4200  [::]:0  LISTENING  22\r\n' };

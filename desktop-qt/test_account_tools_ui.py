@@ -9,7 +9,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QCoreApplication, QEvent, QObject, QPoint, QSettings, QTemporaryDir, Qt, pyqtSignal
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QLabel, QLineEdit, QPlainTextEdit, QPushButton
+from PyQt6.QtWidgets import (QApplication, QDialog, QDialogButtonBox, QFileDialog, QLabel, QLineEdit,
+                             QPlainTextEdit, QPushButton)
 
 from account_tools import MAX_BODY_BYTES, build_import_payload
 from main import demo_snapshot
@@ -106,7 +107,7 @@ class AccountToolsUiTests(unittest.TestCase):
         w, tools = self.window, self.tools
         self.assertTrue(tools.capture_button.isEnabled())
         self.assertTrue(tools.import_button.isEnabled())
-        for field, value in (("_online", False), ("_closing", True), ("demo", True), ("client", None)):
+        for field, value in (("_online", False), ("_closing", True), ("client", None)):
             with self.subTest(field=field):
                 original = getattr(w, field)
                 setattr(w, field, value)
@@ -129,6 +130,40 @@ class AccountToolsUiTests(unittest.TestCase):
                 tools.update_enabled()
         self.assertTrue(tools.capture_button.isEnabled())
         self.assertTrue(tools.import_button.isEnabled())
+
+    def test_demo_keeps_affordances_live_but_only_previews(self):
+        demo = MainWindow(demo=True)
+        try:
+            demo.resize(940, 580)
+            demo.show()
+            demo.navigate(1, animate=False)
+            demo.settle_animations()
+            self.app.processEvents()
+            tools = demo.account_tools
+            self.assertTrue(demo.demo)
+            self.assertIsNone(demo.client)
+            self.assertTrue(tools.capture_button.isEnabled())
+            self.assertTrue(tools.import_button.isEnabled())
+            with patch.object(QDialog, "exec", side_effect=AssertionError("demo import opened a dialog")), \
+                    patch.object(QFileDialog, "getOpenFileName", side_effect=AssertionError("demo opened a file dialog")), \
+                    patch.object(QFileDialog, "getSaveFileName", side_effect=AssertionError("demo opened a file dialog")):
+                QTest.mouseClick(tools.capture_button, Qt.MouseButton.LeftButton)
+                self.assertIn("预览模式", demo.notice.text())
+                QTest.mouseClick(tools.import_button, Qt.MouseButton.LeftButton)
+                self.assertIn("预览模式", demo.notice.text())
+                tools.export_accounts()
+                self.assertIn("预览模式", demo.notice.text())
+                tools.refresh_all()
+                self.assertIn("预览模式", demo.notice.text())
+            self.assertEqual(demo._pending, {})
+            self.assertTrue(tools.capture_button.isEnabled())
+            self.assertTrue(tools.import_button.isEnabled())
+        finally:
+            demo._closing = True
+            demo.hide()
+            demo.deleteLater()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            self.app.processEvents()
 
     def test_capture_click_sends_existing_request_once_and_waits(self):
         QTest.mouseClick(self.tools.capture_button, Qt.MouseButton.LeftButton)

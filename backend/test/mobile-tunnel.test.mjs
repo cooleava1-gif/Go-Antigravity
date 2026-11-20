@@ -61,12 +61,13 @@ function responseFactory({ status = 200, body = '{}', headers = {} } = {}) {
 test('loopback readiness requires a positive numeric connection count, not status alone', async () => {
   for (const value of [0, -1, null, '1']) {
     const f = responseFactory({ body: JSON.stringify({ readyConnections: value }) });
-    assert.equal(await metricsReady({ requestImpl: f.requestImpl }), false);
+    assert.equal(await metricsReady('http://127.0.0.1:20382/ready', { requestImpl: f.requestImpl }), false);
   }
   for (const f of [responseFactory({ body: 'not json' }), responseFactory({ status: 503, body: '{"readyConnections":1}' }), responseFactory({ body: 'x'.repeat(5000) })])
-    assert.equal(await metricsReady({ requestImpl: f.requestImpl }), false);
+    assert.equal(await metricsReady('http://127.0.0.1:20382/ready', { requestImpl: f.requestImpl }), false);
   const f = responseFactory({ body: '{"readyConnections":2}' });
-  assert.equal(await metricsReady({ requestImpl: f.requestImpl }), true);
+  assert.equal(await metricsReady('http://127.0.0.1:20382/ready', { requestImpl: f.requestImpl }), true);
+  assert.equal(f.calls[0].url, 'http://127.0.0.1:20382/ready');
   assert.equal(f.calls[0].options.method, 'GET'); assert.equal(f.calls[0].options.agent, false);
 });
 test('public HEAD verifies the unauthenticated PIN page and never follows redirects or sends credentials', async () => {
@@ -219,4 +220,21 @@ test('asynchronous replacement error cannot create parallel retries and stays wi
   f.children[3].emit('error', Error('sensitive detail')); await f.supervisor.done;
   assert.equal(f.children.length, 4); assert.equal(f.records.at(-1).error, 'TUNNEL_RECOVERY_EXHAUSTED');
   assert.doesNotMatch(JSON.stringify(f.records), /sensitive/);
+});
+
+
+test('reservePort rejection during a restart fails immediately instead of waiting the full timeout', async () => {
+ let reservations = 0;
+ const f = fixture({
+   reservePort: async () => { reservations++; if (reservations >= 2) throw Error('emulated port allocation failure'); return 40000 + reservations; },
+ });
+ await f.ready();
+ // Force a restart: first edge failure triggers rebuild, which reserves a second port and fails.
+ f.edge = false;
+ const before = performance.now();
+ const code = await f.supervisor.done;
+ const elapsed = performance.now() - before;
+ assert.equal(code, 1, 'supervisor must settle with failure');
+ assert.ok(elapsed < 300, 'must fail fast, not wait the full tunnel timeout (got ' + elapsed.toFixed(1) + 'ms)');
+ assert.equal(reservations, 2, 'first launch and one restart reservation only');
 });

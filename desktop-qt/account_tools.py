@@ -2,6 +2,9 @@
 
 Integration: mount(layout), render_status(snapshot), and update_enabled() from
 MainWindow's enablement pass. Import/export files are chosen explicitly by users.
+
+Demo windows keep every account affordance enabled so the layout can be reviewed, but a click
+only shows the preview notice: no dialog opens, no file is written, and no request is sent.
 """
 from __future__ import annotations
 
@@ -96,32 +99,54 @@ class AccountTools:
         self.update_enabled()
 
     def capture_current(self) -> None:
+        if self._preview():
+            return
         if self._ready("capture"):
             self.owner.perform("capture", "/api/accounts/capture", {})
 
+    def _demo(self) -> bool:
+        return bool(getattr(self.owner, "demo", False))
+
     def _ready(self, action: str) -> bool:
+        """Real execution only: a demo window never reaches the backend."""
         pending = getattr(self.owner, "_pending", {}) or {}
         return bool(
             getattr(self.owner, "client", None)
             and getattr(self.owner, "_online", False)
             and not getattr(self.owner, "_closing", False)
-            and not getattr(self.owner, "demo", False)
+            and not self._demo()
             and action not in pending
         )
+
+    def _enabled(self, action: str) -> bool:
+        """Demo windows advertise the same affordances as a live window; a click explains instead."""
+        if self._demo():
+            return bool(
+                getattr(self.owner, "_online", False)
+                and not getattr(self.owner, "_closing", False)
+                and action not in (getattr(self.owner, "_pending", {}) or {})
+            )
+        return self._ready(action)
+
+    def _preview(self) -> bool:
+        if self._demo():
+            self.owner.preview_only("预览模式：不会读取、导入或导出账户，也不会修改任何设置。")
+            return True
+        return False
 
     def update_enabled(self) -> None:
         if not self._mounted:
             return
-        self.capture_button.setEnabled(self._ready("capture"))
-        self.import_button.setEnabled(self._ready("accounts-import"))
+        self.capture_button.setEnabled(self._enabled("capture"))
+        self.import_button.setEnabled(self._enabled("accounts-import"))
 
         accounts = (getattr(self.owner, "snapshot", {}).get("accounts") or {}).get("items") or []
         self.refresh_button.setEnabled(
-            self._ready("quota-refresh-all")
+            self._enabled("quota-refresh-all")
             and self._quota_task.get("state") != "running"
             and any(not item.get("locked") for item in accounts)
         )
-        self.reauth_button.setEnabled(self._ready("oauth-start") and bool(self.owner.selected_account()))
+        self.reauth_button.setEnabled(self._enabled("oauth-start") and bool(self.owner.selected_account()))
 
     def render_status(self, state: dict) -> None:
         if "quotaTask" in state:
@@ -138,6 +163,8 @@ class AccountTools:
             self.update_enabled()
 
     def import_accounts(self) -> None:
+        if self._preview():
+            return
         if not self._ready("accounts-import"):
             return
         dialog = QDialog(self.owner)
@@ -214,6 +241,8 @@ class AccountTools:
         )
 
     def export_accounts(self, include_tokens: bool = False) -> None:
+        if self._preview():
+            return
         if not self._ready("accounts-export"):
             return
         if include_tokens and not self.owner.confirm(
@@ -259,6 +288,8 @@ class AccountTools:
         self.owner.perform("accounts-export", "/api/accounts/export", body, callback=saved)
 
     def refresh_all(self) -> None:
+        if self._preview():
+            return
         if not self._ready("quota-refresh-all") or self._quota_task.get("state") == "running":
             return
 
@@ -271,6 +302,8 @@ class AccountTools:
         self.owner.perform("quota-refresh-all", "/api/accounts/quota/refresh-all", {}, callback=started)
 
     def reauthorize(self, account_id: str | None = None) -> None:
+        if self._preview():
+            return
         if not self._ready("oauth-start"):
             return
         account = None

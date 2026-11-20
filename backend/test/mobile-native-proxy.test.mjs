@@ -131,3 +131,36 @@ test('native same-origin tunneled phone requests and local clients remain compat
   assert.ok(!forwarded.headers.cookie?.includes('go_antigravity_mobile_session='));
  }
 });
+
+
+test('compat writes reject a foreign Origin even with the mobile header, and accept same-origin or absent Origin', { timeout: 10000 }, async t => {
+ const f = await fixture(t);
+ // Foreign Origin with the required header must be rejected before discovery or forwarding.
+ const foreign = await f.post({ origin: 'https://hostile.example.test', 'x-go-antigravity-mobile': '1', 'content-type': 'application/json' });
+ assert.equal(foreign.status, 403);
+ assert.equal(f.discoveries(), 0, 'foreign Origin must not reach discovery');
+ // Same-origin Origin and absent Origin (local non-browser client) remain compatible.
+ assert.equal((await f.post({ origin: ORIGIN, 'x-go-antigravity-mobile': '1', 'content-type': 'application/json' })).status, 200);
+ assert.equal((await f.post({ 'x-go-antigravity-mobile': '1', 'content-type': 'application/json' })).status, 200);
+ assert.ok(f.received.length >= 2, 'trusted compat writes still forward');
+});
+
+test('native upstream failure returns an HTML error page with a clickable /mobile/ compatibility entry', { timeout: 10000 }, async t => {
+ const f = await fixture(t);
+ // Stop the synthetic upstream so discovery/forwarding fails with 502.
+ f.nativeBase = null;
+ const upstream2 = createServer(() => {});
+ const dead = await listen(upstream2);
+ await new Promise(resolve => upstream2.close(resolve));
+ // Point discovery at a closed port: proxy must respond 502 with the HTML page.
+ const runtime = createMobileServer({ pin: '12345678', adapter: { discover: async () => ({ base: 'http://127.0.0.1:1', token: 'synthetic-native-token' }) } });
+ t.after(async () => { await runtime.close(); });
+ const base = await listen(runtime.server);
+ const login = await http(base, '/pocket-login', { method: 'POST', headers: { host: HOST, origin: ORIGIN, 'sec-fetch-site': 'same-origin', 'x-forwarded-proto': 'https', 'content-type': 'application/x-www-form-urlencoded' }, body: 'token=12345678' });
+ const cookie = login.headers['set-cookie'][0].split(';')[0];
+ const res = await http(base, ROUTE, { method: 'POST', headers: { host: HOST, cookie, 'x-go-antigravity-mobile': '1', 'content-type': 'application/json' }, body: '{}' });
+ assert.equal(res.status, 502);
+ assert.match(res.headers['content-type'], /text\/html/);
+ assert.ok(res.body.includes('/mobile/'), 'error page must link the compatibility entry');
+ assert.ok(res.body.includes('兼容入口'));
+});

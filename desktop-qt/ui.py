@@ -26,6 +26,8 @@ from widgets import (
     AccountCardWidget, ElidedLabel, GlassCanvas, GlassCard, ModelDistributionBar,
     SegmentedControl, ToggleSwitch, svg_icon,
 )
+from tray import create_tray
+from update_ui import UpdateController, VersionStrip
 
 
 def label(text: str = "", role: str = "", wrap: bool = False) -> QLabel:
@@ -101,20 +103,19 @@ class MainWindow(QMainWindow):
     ]
 
     TIER_HINTS = {
-        "stock": "保留官方提示词，适合对照使用或恢复默认。",
+        "stock": "使用 Antigravity 自带的系统提示词。",
         "1": "旧 1 档：仅保留兼容识别。请主动选择新版，或恢复官方原版。",
         "2": "旧 2 档：仅保留兼容识别。请主动选择新版，或恢复官方原版。",
-        "3": "精简·防编造：保留辅助模板，用更短的核心规则约束证据、工具调用与结果核验。",
-        "4": "旧 4 档：仅保留兼容识别。请主动选择新版，或恢复官方原版。",
+        "3": "核心提示词只留授权、查证、工具使用和结果核验规则。",
+        "4": "正在使用旧均衡档。可选择官方原版或最大化精简。",
     }
     # Only two tiers stay selectable. Tier "custom" still exists in the backend vocabulary for
     # recognising kernels patched by an older build, but it is never offered here.
     VISIBLE_TIERS = ("stock", "3")
 
     CTX_HINTS = {
-        "stock": "沿用当前客户端的默认上限；所有受支持模型实际上都支持 1M 上下文。",
-        "512k": "本机客户端上限设为 512,000 Token；所有受支持模型实际上都支持 1M 上下文。",
-        "900k": "本机客户端上限设为 983,040 Token（约 960K）；所有受支持模型实际上都支持 1M 上下文。",
+        "256k": "本机客户端上限为 256,000 Token。",
+        "512k": "本机客户端上限为 512,000 Token。",
     }
 
     def __init__(self, demo: bool = False):
@@ -123,6 +124,7 @@ class MainWindow(QMainWindow):
         self.snapshot: dict = {}
         self._online, self._closing = demo, False
         self._dirty: set[str] = set()
+        self._kernel_axes: set[str] = set()
         self._pending: dict[str, tuple] = {}
         self._account_items: list[dict] = []
         self._log_items: list[dict] = []
@@ -137,6 +139,11 @@ class MainWindow(QMainWindow):
         self._page_effects: list[QGraphicsOpacityEffect] = []
         self._qr_url = ""
         self._clear_tunnel_token = False
+        self._pre_close_hook = None
+        # 显式退出（托盘退出 / 更新重启 / --quit-after）置位；普通点关闭只隐藏。
+        self._exit_requested = False
+        #: 系统托盘控制器；无托盘环境为 None，关闭回退常规退出。
+        self.tray = None
 
         self.settings = QSettings("Go-Antigravity", "Desktop")
         self.dark = True if demo else self.settings.value("dark", True, type=bool)
@@ -148,9 +155,6 @@ class MainWindow(QMainWindow):
         self.resize(1120, 640)
 
         self._build()
-        # Building the widgets selects their default segments, which marks "kernel" dirty through the
-        # ordinary change handlers. Nothing the user did has happened yet, so the marks are cleared —
-        # otherwise the first render_status() would skip syncing the controls to the saved backend state.
         self._dirty.clear()
         self.set_dark(self.dark, persist=False)
 
@@ -159,8 +163,9 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+2"), self, activated=lambda: self.navigate(1))
         QShortcut(QKeySequence("Ctrl+3"), self, activated=lambda: self.navigate(2))
         QShortcut(QKeySequence("Ctrl+4"), self, activated=lambda: self.navigate(3))
-        QShortcut(QKeySequence("Ctrl+5"), self, activated=lambda: self.navigate(4))
-        QShortcut(QKeySequence("Ctrl+6"), self, activated=lambda: self.navigate(5))
+        self.tray = create_tray(self)
+        if self.tray is not None:
+            self.tray.show()
         self._update_enabled()
 
     def showEvent(self, event) -> None:
@@ -308,6 +313,11 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ Page 0: Overview (6:6 Symmetrical)
     def _build_workbench_page(self, layout: QVBoxLayout) -> None:
+        # Compact version / update strip: discoverable without squeezing the main nav.
+        self.update_controller = UpdateController(Path(__file__).resolve().parent.parent, demo=self.demo, parent=self)
+        self.update_strip = VersionStrip(self, self.update_controller)
+        layout.addWidget(self.update_strip)
+
         columns = QHBoxLayout()
         columns.setSpacing(14)
 
@@ -439,28 +449,26 @@ class MainWindow(QMainWindow):
         self.tier.setAccessibleName("提示词档位")
         for text, key, tip in [
             ("官方原版", "stock", self.TIER_HINTS["stock"]),
-            ("精简·防编造", "3", self.TIER_HINTS["3"]),
+            ("最大化精简", "3", self.TIER_HINTS["3"]),
         ]:
             self.tier.addItem(text, key, tip)
         self.tier.currentIndexChanged.connect(self._on_tier_changed)
         kl.addWidget(self.tier)
-        self.tier_hint_label = label(self.TIER_HINTS["3"], "Small", True)
+        self.tier_hint_label = label(self.TIER_HINTS["stock"], "Small", True)
         kl.addWidget(self.tier_hint_label)
-        self.tier.setCurrentIndex(self.tier.findData("3"))
 
         # Context Window Segmented Control + Underneath Description
         kl.addWidget(label("上下文窗口上限", "Sub"))
         self.context = self._register_glass(SegmentedControl())
         self.context.setAccessibleName("上下文窗口")
         for text, key, tip in [
-            ("官方原版", "stock", self.CTX_HINTS["stock"]),
+            ("256K（默认）", "256k", self.CTX_HINTS["256k"]),
             ("512K", "512k", self.CTX_HINTS["512k"]),
-            ("900K / 1M", "900k", self.CTX_HINTS["900k"]),
         ]:
             self.context.addItem(text, key, tip)
         self.context.currentIndexChanged.connect(self._on_context_changed)
         kl.addWidget(self.context)
-        self.context_hint_label = label(self.CTX_HINTS["512k"], "Small", True)
+        self.context_hint_label = label(self.CTX_HINTS["256k"], "Small", True)
         kl.addWidget(self.context_hint_label)
 
         kl.addWidget(divider())
@@ -791,6 +799,9 @@ class MainWindow(QMainWindow):
 
         self.mobile_detail = label("等待读取远程服务状态…", "Small", True)
         cl.addWidget(self.mobile_detail)
+        self.mobile_desktop_note = label("远程接入依赖桌面端 Antigravity 就绪。", "Small", True)
+        self.mobile_desktop_note.setWordWrap(True)
+        cl.addWidget(self.mobile_desktop_note)
         cl.addStretch(1)
 
         cl.addWidget(divider())
@@ -1012,10 +1023,14 @@ class MainWindow(QMainWindow):
             return bool(self._pending)
         return any(a in self._pending for a in actions)
 
+    def preview_only(self, message: str = "预览模式：此操作不会修改账户、设置或启动服务。") -> bool:
+        """Demo affordances stay clickable for layout review, but never change state or call the backend."""
+        self.inform(message)
+        return False
+
     def perform(self, action: str, route: str, body=None, callback=None, scope: str | None = None, timeout: int = 20000) -> bool:
         if self.demo:
-            self.inform("预览模式：此操作不会修改账户、设置或启动服务。")
-            return False
+            return self.preview_only()
         if not self.client or not self._online or self._closing:
             self.inform("本机服务尚未连接，请稍后重试。")
             return False
@@ -1038,6 +1053,8 @@ class MainWindow(QMainWindow):
         callback, scope, setting_keys = entry
         if scope:
             self._dirty.discard(scope)
+        if action == "kernel-apply":
+            self._kernel_axes.clear()
         patch = {}
         if isinstance(data, dict):
             if isinstance(data.get("settings"), dict):
@@ -1095,13 +1112,15 @@ class MainWindow(QMainWindow):
 
     def _on_tier_changed(self, _idx: int) -> None:
         self._dirty.add("kernel")
-        key = str(self.tier.currentData() or "3")
+        self._kernel_axes.add("promptTier")
+        key = str(self.tier.currentData() or "stock")
         self.tier_hint_label.setText(self.TIER_HINTS.get(key, ""))
         self._update_dirty_badges()
 
     def _on_context_changed(self, _idx: int) -> None:
         self._dirty.add("kernel")
-        key = str(self.context.currentData() or "512k")
+        self._kernel_axes.add("contextMode")
+        key = str(self.context.currentData() or "256k")
         self.context_hint_label.setText(self.CTX_HINTS.get(key, ""))
         self._update_dirty_badges()
 
@@ -1137,18 +1156,20 @@ class MainWindow(QMainWindow):
 
         kernel = state.get("kernel") or {}
         desired = kernel.get("desired") or {}
-        if "kernel" not in self._dirty:
-            t_val = desired.get("promptTier", state.get("promptTier", "3"))
-            c_val = desired.get("contextMode", state.get("contextMode", "512k"))
+        if "promptTier" not in self._kernel_axes:
+            t_val = desired.get("promptTier", state.get("promptTier", "stock"))
             self.set_control(self.tier, t_val)
             if str(t_val) not in self.VISIBLE_TIERS:
                 self.tier._group.setExclusive(False)
                 for button in self.tier._buttons:
                     button.setChecked(False)
                 self.tier._group.setExclusive(True)
-            self.set_control(self.context, c_val)
             self.tier_hint_label.setText(self.TIER_HINTS.get(str(t_val), ""))
-            self.context_hint_label.setText(self.CTX_HINTS.get(str(c_val), ""))
+        if "contextMode" not in self._kernel_axes:
+            c_val = desired.get("contextMode", state.get("contextMode"))
+            c_val = "512k" if c_val in ("512k", "900k") else "256k"
+            self.set_control(self.context, c_val)
+            self.context_hint_label.setText(self.CTX_HINTS[c_val])
 
         targets = [t for t in kernel.get("targets", []) if t.get("exists")]
         errors = [t.get("error") for t in targets if t.get("error")]
@@ -1166,13 +1187,19 @@ class MainWindow(QMainWindow):
         self.strip_backup_pill.style().unpolish(self.strip_backup_pill)
         self.strip_backup_pill.style().polish(self.strip_backup_pill)
         if any(t.get("promptLegacy") for t in targets):
-            hint += " · 正在使用旧版提示词，应用所选档位后更新。"
+            hint += " · 正在使用旧版提示词。选择提示词档位后点击应用即可更新。"
+        platform = kernel.get("platformSupported")
+        if platform is False:
+            hint += " · 当前系统不支持内核替换，相关按钮已禁用。"
+        elif platform is not True:
+            hint += " · 后端未报告本系统是否支持内核替换，为避免误改已禁用相关按钮。"
         self.kernel_hint.setText(hint)
 
         self.render_proxy(state.get("proxy") or {})
-        items = (state.get("accounts") or {}).get("items") or []
+        accounts = state.get("accounts") or {}
+        items = accounts.get("items") or []
         self._account_items = items
-        self._render_overview_account(items, (state.get("accounts") or {}).get("activeId"))
+        self._render_overview_account(items, self._launch_account_id(accounts), bool(accounts.get("hasClientLogin")))
         self.render_accounts()
         self.render_oauth(state.get("oauthFlow"))
         self.render_usage(state.get("tokenUsage") or {})
@@ -1181,15 +1208,23 @@ class MainWindow(QMainWindow):
         self._update_dirty_badges()
         self._update_enabled()
 
-    def _render_overview_account(self, items: list[dict], active_id: str | None) -> None:
+    @staticmethod
+    def _launch_account_id(accounts: dict) -> str | None:
+        if accounts.get("hasClientLogin"):
+            return accounts.get("startupId")
+        return accounts.get("activeId")
+
+    def _render_overview_account(self, items: list[dict], active_id: str | None, has_client_login: bool) -> None:
         live = next((a for a in items if a.get("isLive")), None)
         target = live or next((a for a in items if a.get("id") == active_id), None)
         if target:
             name = str(target.get("name") or target.get("email") or "账户")
             tier = str(target.get("tier") or "").upper()
             suffix = f" ({tier})" if tier and tier != "UNKNOWN" else ""
-            tag = "当前生效" if live else "启动账户"
+            tag = "客户端账户" if live else "启动账户"
             self.overview_account_label.setText(f"{tag}：{name[:14]}{suffix}")
+        elif has_client_login:
+            self.overview_account_label.setText("沿用客户端登录")
         else:
             self.overview_account_label.setText(f"已保存 {len(items)} 个账户" if items else "尚未添加账户")
 
@@ -1286,11 +1321,13 @@ class MainWindow(QMainWindow):
             self.model_dist_list.addWidget(label("暂无模型用量记录", "Small"))
 
     def render_accounts(self, force: bool = False) -> None:
+        accounts = self.snapshot.get("accounts") or {}
+        active_id = self._launch_account_id(accounts)
         key = json.dumps(
             [
                 self._account_items,
-                (self.snapshot.get("accounts") or {}).get("activeId"),
-                (self.snapshot.get("accounts") or {}).get("liveId"),
+                active_id,
+                accounts.get("liveId"),
                 self._selected_account_id,
             ],
             ensure_ascii=False,
@@ -1333,7 +1370,6 @@ class MainWindow(QMainWindow):
             old_card.deleteLater()
         self._account_cards.clear()
 
-        active_id = (self.snapshot.get("accounts") or {}).get("activeId")
         busy = self._is_busy("account-select", "account-switch", "account-remove", "account-quota", "launch")
         insert_pos = 0
         for a in visible:
@@ -1476,12 +1512,24 @@ class MainWindow(QMainWindow):
         else:
             detail = "选择临时隧道（免配置）或固定域名，点击「启动远程服务」即可手机扫码接入。"
         self.mobile_detail.setText(detail)
+        self.mobile_desktop_note.setText(self._desktop_dependency_note())
 
         if "mobile" not in self._dirty:
             self.set_control(self.mobile_mode, mobile.get("mode", self.snapshot.get("mobileMode", "quick")))
             self.set_control(self.fixed_url, mobile.get("fixedUrl", self.snapshot.get("mobileFixedUrl", "")))
             self.set_control(self.mobile_auto, mobile.get("autoStart", self.snapshot.get("mobileAutoStart", False)))
         self._render_mobile_token_status()
+
+    def _desktop_dependency_note(self) -> str:
+        """Phone access needs a ready desktop, so the page never implies online without one."""
+        if self.demo:
+            return "预览模式：远程接入依赖桌面端 Antigravity 就绪；预览不启动隧道，手机端不会显示在线。"
+        if not self._online:
+            return "桌面端尚未连接：手机端只会提示「未连接桌面端，请先打开 Antigravity」，本页不会显示虚假在线。"
+        phase = self.snapshot.get("phase", (self.snapshot.get("session") or {}).get("phase", "idle"))
+        if phase != "running":
+            return "桌面端 Antigravity 未运行：隧道可以启动，但手机端会提示「未连接桌面端，请先打开 Antigravity」。"
+        return "桌面端 Antigravity 运行中：手机扫码后即可接管当前会话。"
 
     def _render_mobile_token_status(self) -> None:
         mobile = self.snapshot.get("mobile") or {}
@@ -1558,7 +1606,8 @@ class MainWindow(QMainWindow):
             online
             and not enh_busy
             and phase not in ("preparing", "launching")
-            and kernel.get("platformSupported", True)
+            # Only an explicit true allows kernel writes: a missing flag is unknown, not supported.
+            and kernel.get("platformSupported") is True
             and any(t.get("exists") for t in kernel.get("targets", []))
         )
         for w in (self.tier, self.context, self.kernel_button, self.restore_button):
@@ -1568,13 +1617,21 @@ class MainWindow(QMainWindow):
         self.oauth_button.setEnabled(online and not acc_busy)
         self.oauth_submit_button.setEnabled(online and not self._is_busy("oauth-submit"))
         self.oauth_cancel_button.setEnabled(online and not self._is_busy("oauth-cancel"))
+
+        if hasattr(self, "update_strip"):
+            self.update_strip.update_enabled()
         self.oauth_open_button.setEnabled(bool(self.oauth_url.text()) and not self._closing)
         self.oauth_copy_button.setEnabled(bool(self.oauth_url.text()) and not self._closing)
 
         selected = self.selected_account()
-        active_id = (self.snapshot.get("accounts") or {}).get("activeId")
+        startup_id = (self.snapshot.get("accounts") or {}).get("startupId")
+        is_startup = bool(selected and selected.get("id") == startup_id)
         sel_busy = self._is_busy("account-select", "account-switch", "account-remove", "account-quota", "launch")
-        self.select_account_button.setEnabled(bool(online and selected and not sel_busy and selected.get("id") != active_id))
+        self.select_account_button.setText("取消指定" if is_startup else "设为启动")
+        self.select_account_button.setToolTip(
+            "取消指定后，启动时优先沿用客户端登录" if is_startup else "启动时使用此账户，替换客户端已有的登录"
+        )
+        self.select_account_button.setEnabled(bool(online and selected and not sel_busy and (is_startup or not selected.get("locked"))))
         self.quota_button.setEnabled(bool(online and selected and not sel_busy and not selected.get("locked")))
         self.remove_account_button.setEnabled(bool(online and selected and not sel_busy))
         for card in self._account_cards:
@@ -1693,18 +1750,19 @@ class MainWindow(QMainWindow):
         )
 
     def apply_kernel(self, checked: bool = False, restore: bool = False) -> None:
-        values = (
-            {"promptTier": "stock", "contextMode": "stock"}
-            if restore
-            else {"promptTier": self.tier.currentData(), "contextMode": self.context.currentData()}
-        )
-        if not restore:
-            if values["promptTier"] not in self.VISIBLE_TIERS:
-                self.inform("请选择官方原版或精简·防编造，再应用设置。")
+        if restore:
+            values = {"promptTier": "stock", "contextMode": "256k"}
+        else:
+            values = {
+                key: control.currentData()
+                for key, control in (("promptTier", self.tier), ("contextMode", self.context))
+                if key in self._kernel_axes
+            }
+            if not values:
+                self.inform("请先选择要应用的提示词或上下文档位。")
                 return
-            self._dirty.add("kernel")
         if self.confirm(
-            "恢复官方内核" if restore else "应用本机内核设置",
+            "恢复默认（官方提示词 + 256K）" if restore else "应用本机内核设置",
             "这会修改本机 Antigravity 的 language_server.exe，首次修改自动创建 .bak 备份。建议先退出 AG。是否继续？",
         ):
             self.perform("kernel-apply", "/api/kernel/apply", values, scope="kernel", timeout=120000)
@@ -1767,7 +1825,8 @@ class MainWindow(QMainWindow):
     def select_account(self) -> None:
         a = self.selected_account()
         if a:
-            self.perform("account-select", "/api/accounts/select", {"id": a["id"]})
+            startup_id = (self.snapshot.get("accounts") or {}).get("startupId")
+            self.perform("account-select", "/api/accounts/select", {"id": None if a["id"] == startup_id else a["id"]})
 
     def switch_account(self) -> None:
         a = self.selected_account()
@@ -2005,16 +2064,63 @@ class MainWindow(QMainWindow):
             self.logs.clear()
         scroll.setValue(scroll.maximum() if bottom else previous)
 
+    def request_exit(self) -> bool:
+        """显式退出入口（托盘退出、更新重启、--quit-after）。
+
+        走与点关闭按钮相同的关闭路径：先未保存设置确认，再执行待处理的更新
+        handoff，只有全部通过才真正退出。返回是否真实接受了这次关闭——取消
+        （未保存确认拒绝或 handoff 失败）时返回 False，窗口保持打开。
+        """
+        if self._closing:
+            return True
+        self._exit_requested = True
+        try:
+            self.close()
+        finally:
+            self._exit_requested = False
+        return self._closing
+
+    def begin_update_close(self, handoff) -> bool:
+        """Run the update handoff inside the real close path instead of a second close."""
+        self._pre_close_hook = handoff
+        try:
+            # 更新重启是显式退出：必须穿过托盘隐藏分支，否则只隐藏、安装器不生效。
+            return self.request_exit()
+        finally:
+            self._pre_close_hook = None
+
     def closeEvent(self, event) -> None:
         if self._closing:
             event.ignore()
             return
+        tray = getattr(self, "tray", None)
+        if not self._exit_requested and tray is not None and not self.demo and self._pre_close_hook is None:
+            # 普通关闭：先隐藏到托盘驻留，不 emit closing——后端、隧道与更新器
+            # 线程全部保持运行。隐藏不丢设置，因此这里不弹未保存确认；确认只在
+            # 真正退出（托盘退出 / 更新重启 / --quit-after）时出现。
+            event.ignore()
+            tray.show()
+            self.hide()
+            return
         if self._dirty and not self.demo and not self.confirm("关闭工作台", "有尚未保存的设置，关闭会放弃这些改动。是否继续？"):
             event.ignore()
             return
+        hook = self._pre_close_hook
+        if hook is not None:
+            # Update restart reuses this close path: only proceed when the hook agrees.
+            try:
+                proceed = bool(hook())
+            except Exception:
+                proceed = False
+            if not proceed:
+                event.ignore()
+                return
+        # 显式退出或无托盘回退：沿用既有退出序列。
         self._closing = True
         self.tunnel_token.clear()
         self._clear_tunnel_token = False
+        if tray is not None:
+            tray.hide()
         self._update_enabled()
         self.hide()
         self.closing.emit()
