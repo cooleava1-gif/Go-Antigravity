@@ -355,21 +355,37 @@ function matchesPaddedTemplate(buffer, slot, text) {
   return buffer.subarray(slot.dataOffset, slot.dataOffset + slot.dataLength).equals(expected);
 }
 
+// Only identity and the three core templates are load-bearing. Antigravity ships a different
+// auxiliary set per build (44.9.x dropped knowledge_items, planning_mode_artifacts and plugins and
+// added skills, test_funcmap and helpers/*), so helper slots are matched against what the kernel has.
+function presentSlots(slots, names) {
+  return names.filter(name => slots.has(name));
+}
+
+// Distinguishes a template set that this build never shipped from one that exists but failed to
+// parse: the embed.FS name blob still carries every declared path, so a declared-but-unparsed
+// helper means a malformed or half-written image rather than a newer Antigravity release.
+function declaresTemplate(buffer, name) {
+  return buffer.includes(Buffer.from(TEMPLATE_PREFIX + name, 'utf8'));
+}
+
 function detectPromptState(slots, buffer) {
   const state = (tier, payloadVersion = null) => ({ tier, payloadVersion, legacy: payloadVersion === 1 });
-  const required = [IDENTITY_SLOT, ...CORE_SLOTS, ...BLOAT_SLOTS];
-  if (required.some(name => !slots.has(name))) return state('unknown');
+  if ([IDENTITY_SLOT, ...CORE_SLOTS].some(name => !slots.has(name))) return state('unknown');
+  if ([...BLOAT_SLOTS, ...AD_SLOTS].some(name => !slots.has(name) && declaresTemplate(buffer, name))) return state('unknown');
+  const bloat = presentSlots(slots, BLOAT_SLOTS);
+  const ad = presentSlots(slots, AD_SLOTS);
   const stripped = name => slots.get(name).stripped === true;
-  const allStripped = names => names.every(name => stripped(name) && matchesPaddedTemplate(buffer, slots.get(name), ''));
+  const allStripped = names => names.length > 0 && names.every(name => stripped(name) && matchesPaddedTemplate(buffer, slots.get(name), ''));
   const noStripped = names => names.every(name => !stripped(name));
   // A kernel written by the removed custom tier still starts with its self-describing header.
   const guidelines = slots.get(CORE_SLOTS[0]);
-  if (hasLegacyCustomHeader(buffer.toString('utf8', guidelines.dataOffset, guidelines.dataOffset + guidelines.dataLength)) && noStripped(BLOAT_SLOTS)) {
+  if (hasLegacyCustomHeader(buffer.toString('utf8', guidelines.dataOffset, guidelines.dataOffset + guidelines.dataLength)) && noStripped(bloat)) {
     return { tier: 'custom', payloadVersion: 3, legacy: true };
   }
   for (const version of [payloads.version, 1]) {
     for (const tier of ['3', '4']) {
-      const helpersMatch = version === 1 ? allStripped(BLOAT_SLOTS) : noStripped(BLOAT_SLOTS);
+      const helpersMatch = version === 1 ? allStripped(bloat) : noStripped(bloat);
       if (helpersMatch && CORE_SLOTS.every(name => matchesPaddedTemplate(buffer, slots.get(name), payloadFor(tier, name, version)))) {
         return state(tier, version);
       }
@@ -379,14 +395,16 @@ function detectPromptState(slots, buffer) {
   const rewritten = CORE_SLOTS.some(name => {
     const slot = slots.get(name);
     const text = buffer.toString('utf8', slot.dataOffset, slot.dataOffset + slot.dataLength);
+    // Only a trailing whitespace-only pad comment counts as a write of ours: official templates also
+    // open with PAD_OPEN, so the bare opener cannot be treated as a patch signature.
     // legacy marker from earlier builds: kernels patched under the old name still start with it
-    return text.includes(PAD_OPEN) || text.startsWith(LEGACY_CUSTOM_MARKER) || text.startsWith('Goagy ') || [1, payloads.version].some(version =>
+    return activeTemplateText(text) !== text || text.startsWith(LEGACY_CUSTOM_MARKER) || text.startsWith('Goagy ') || [1, payloads.version].some(version =>
       ['3', '4'].some(tier => text.startsWith(payloadFor(tier, name, version).slice(0, 40))));
   });
   if (rewritten) return state('unknown');
-  if (allStripped(BLOAT_SLOTS)) return state('2', 1);
-  if (allStripped(AD_SLOTS) && noStripped(BLOAT_SLOTS.filter(name => !AD_SLOTS.includes(name)))) return state('1', 1);
-  return noStripped(BLOAT_SLOTS) ? state('stock') : state('unknown');
+  if (allStripped(bloat)) return state('2', 1);
+  if (allStripped(ad) && noStripped(bloat.filter(name => !ad.includes(name)))) return state('1', 1);
+  return noStripped(bloat) ? state('stock') : state('unknown');
 }
 
 function detectPromptTier(slots, buffer) {
@@ -415,16 +433,23 @@ function applyPromptTier(buffer, backup, tier, slots, payloadVersion = payloads.
   if (!Object.hasOwn(PROMPT_TIERS, tier)) throw new Error('未知的提示词档位：' + tier);
   if (tier === 'custom') throw new Error('自定义提示词档位已移除，请选择官方原版或精简');
   const backupSlots = parseEmbedTemplates(backup);
-  if ([IDENTITY_SLOT, ...CORE_SLOTS, ...BLOAT_SLOTS].some(name => !backupSlots.has(name))) {
+  if ([IDENTITY_SLOT, ...CORE_SLOTS].some(name => !backupSlots.has(name))) {
     throw new Error('内核缺少必要模板槽位，当前版本不受支持');
   }
+  const unparsed = [...AD_SLOTS, ...BLOAT_SLOTS].find(name => !backupSlots.has(name) && declaresTemplate(backup, name));
+  if (unparsed) throw new Error('模板槽位 ' + unparsed + ' 已声明但无法解析，当前内核不受支持');
   const identity = backupSlots.get(IDENTITY_SLOT);
   const originalIdentity = backup.subarray(identity.dataOffset, identity.dataOffset + identity.dataLength);
   if (!originalIdentity.includes(Buffer.from(IDENTITY_MARKER))) {
     throw new Error('严重错误：identity.tmpl 身份校验区不完整，已中止写入');
   }
+  // Older kernels run a startup substring check over the (shortened) templates in
+  // genericsystemprompt.applyEdits and panic with code=2 when it fails, so that jump must be patched.
+  // Builds that no longer contain that code (44.9+) have nothing to bypass; a build that still
+  // carries it must show the exact stock signature or the write is not safe.
   const applyEdits = findApplyEditsTail(backup);
-  if (tier !== 'stock' && (!applyEdits || applyEdits.alreadyBypassed)) {
+  const startupCheckShipped = backup.includes(Buffer.from('genericsystemprompt', 'utf8'));
+  if (tier !== 'stock' && (applyEdits ? applyEdits.alreadyBypassed : startupCheckShipped)) {
     throw new Error('未找到唯一的原始 applyEdits 校验签名，当前内核版本不受支持');
   }
   const rewritten = tier === '3' || tier === '4';
@@ -442,7 +467,8 @@ function applyPromptTier(buffer, backup, tier, slots, payloadVersion = payloads.
   }
   let strippedBytes = 0;
   if (tier !== 'stock') {
-    const strippedSlots = tier === '1' ? AD_SLOTS : tier === '2' || payloadVersion === 1 ? BLOAT_SLOTS : [];
+    const wanted = tier === '1' ? AD_SLOTS : tier === '2' || payloadVersion === 1 ? BLOAT_SLOTS : [];
+    const strippedSlots = presentSlots(backupSlots, wanted);
     for (const name of strippedSlots) {
       const slot = backupSlots.get(name);
       writePaddedTemplate(buffer, slot, '');

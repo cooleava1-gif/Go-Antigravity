@@ -103,7 +103,7 @@ function va(fileOffset) {
   return IMAGE_BASE + BigInt(V_ADDR + (fileOffset - RAW_PTR));
 }
 
-function buildKernel() {
+function buildKernel(templates = TEMPLATES) {
   const file = Buffer.alloc(RAW_PTR + RAW_SIZE, 0);
   file.write('MZ', 0, 'ascii');
   file.writeUInt32LE(0x40, 0x3c);
@@ -124,7 +124,7 @@ function buildKernel() {
   let nameCursor = NAMES_OFF;
   let dataCursor = DATA_OFF;
   const placements = [];
-  for (const [name, size] of TEMPLATES) {
+  for (const [name, size] of templates) {
     placements.push({ name, size, nameOffset: nameCursor, dataOffset: dataCursor });
     nameCursor += PREFIX.length + name.length;
     dataCursor += size;
@@ -408,6 +408,60 @@ test('a stock kernel reports stock tier and stock context gates', () => {
   assert.strictEqual(detectContextMode(buffer), 'stock');
   assert.strictEqual(inspectContextGates(buffer).length, CONTEXT_SIGNATURES.length);
   for (const gate of inspectContextGates(buffer)) assert.strictEqual(gate.mode, 'stock');
+});
+
+test('a build with a different auxiliary template set is recognized as stock and stays patchable', () => {
+  // Antigravity 44.9 ships skills/test_funcmap/ephemeral_message instead of the legacy
+  // knowledge_items/planning_mode_artifacts/plugins trio, and every official template now opens
+  // with the same Go template comment this patcher writes as padding.
+  const templates = [
+    ['artifacts.tmpl', 400],
+    ['communication_style.tmpl', 2792],
+    ['conversation_transcript.tmpl', 800],
+    ['ephemeral_message.tmpl', 271],
+    ['function_call.tmpl', 605],
+    ['guidelines.tmpl', 691],
+    ['identity.tmpl', 200],
+    ['persistent_context.tmpl', 500],
+    ['skills.tmpl', 1757],
+    ['slash_commands.tmpl', 900],
+    ['test_funcmap.tmpl', 140]
+  ];
+  const original = buildKernel(templates);
+  const official = parseEmbedTemplates(original);
+  for (const name of CORE_SLOTS) {
+    const slot = official.get(name);
+    const body = '{{- /* official body ' + name + ' */ -}}';
+    original.write(body.padEnd(slot.dataLength, ' ').slice(0, slot.dataLength), slot.dataOffset, 'utf8');
+  }
+  const slots = parseEmbedTemplates(original);
+  assert.strictEqual(detectPromptTier(slots, original), 'stock');
+  assert.strictEqual(detectPromptState(slots, original).tier, 'stock');
+  const buffer = Buffer.from(original);
+  applyPromptTier(buffer, Buffer.from(original), '3', slots);
+  assert.strictEqual(detectPromptTier(parseEmbedTemplates(buffer), buffer), '3');
+  applyPromptTier(buffer, Buffer.from(original), 'stock', slots);
+  assert.ok(buffer.equals(original), 'stock restore returns the exact original bytes');
+});
+
+test('a kernel without the retired startup check is patchable without a bypass', () => {
+  const original = buildKernel();
+  original.fill(0, APPLY_EDITS_OFF, APPLY_EDITS_OFF + 36);
+  assert.ok(!original.includes(Buffer.from('genericsystemprompt', 'utf8')));
+  const buffer = Buffer.from(original);
+  applyPromptTier(buffer, original, '3');
+  assert.ok(!buffer.equals(original), 'templates changed');
+  assert.strictEqual(detectPromptTier(parseEmbedTemplates(buffer), buffer), '3');
+});
+
+test('a declared helper template that cannot be parsed is still refused', () => {
+  const buffer = buildKernel();
+  const index = TEMPLATES.findIndex(([name]) => name === 'knowledge_items.tmpl');
+  // Zero the declared data length: the parser drops the entry, the name blob keeps the path.
+  buffer.writeBigUInt64LE(0n, ENTRIES_OFF + index * 48 + 24);
+  assert.strictEqual(parseEmbedTemplates(buffer).has('system_prompts/knowledge_items.tmpl'), false);
+  assert.strictEqual(detectPromptState(parseEmbedTemplates(buffer), buffer).tier, 'unknown');
+  assert.match(verifyBackupMatches(buffer, buffer), /拒绝写入/);
 });
 
 test('balanced v2 rewrites only core slots and preserves every auxiliary template and identity', () => {
@@ -1402,6 +1456,8 @@ test('marker-only, mixed, damaged and future prompt payloads are never reported 
 test('unrecognized or ambiguous startup signatures and missing slots fail before output mutation', () => {
   for (const kind of ['missing-tail', 'duplicate-prefix', 'missing-slot', 'small-slot', 'duplicate-anchor', 'duplicate-entry', 'duplicate-slot', 'overlapping-slot', 'damaged-identity']) {
     const backup = buildKernel();
+    // Old kernels carry the startup check: a signature that cannot be resolved there must fail.
+    backup.write('genericsystemprompt.applyEdits', 0x7000, 'utf8');
     if (kind === 'missing-tail') backup.fill(0, APPLY_EDITS_OFF, APPLY_EDITS_OFF + 36);
     if (kind === 'duplicate-prefix') backup.write('488b71104889742458488b711848897424384889d1', 0x7100, 'hex');
     const entry = ENTRIES_OFF + TEMPLATES.findIndex(([name]) => name === 'guidelines.tmpl') * 48;
