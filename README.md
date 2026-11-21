@@ -80,13 +80,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows.ps1 
 
 脚本会在 `dist/Go-Antigravity-windows-x64/` 生成 `Go-Antigravity.exe`、后端、桌面文件、锁定的 `node_modules`、Node.js 运行时和可搬运的 Python/PyQt 运行时，并同时生成同名 ZIP。发布包运行时不执行 npm/pip，也不需要用户另外安装 Python 或 Node.js；首次使用时仍需要用户本机已有的 Antigravity 安装，内核补丁会在本地应用到该安装。
 
-打包脚本还会在 ZIP 旁生成同名 `.zip.sha256` 校验文件（标准 `sha256sum` 格式，一行、无 BOM），发布时与 ZIP 一起上传；桌面端下载更新包时用它核对完整性。
+ZIP 和同名 `.zip.sha256` 只是构建产物，不进 Release。发布前再跑一次自解压打包脚本，把目录和 ZIP 合成 GitHub 上唯一的那一个下载文件：
 
-这是一个“目录型 EXE 包”，不是把所有运行时压成单个二进制文件。运行时版本、构建提交、交付源码的修改状态与内容指纹写入 `runtime/manifest.json`（`dirty` 只反映交付文件，不表示整个 Git 工作树是否干净）；Python、Qt、Node 及后端依赖的许可文件随包保留。包内账户、设置和日志默认写入 `%LOCALAPPDATA%\Go-Antigravity`，不会写进发布目录。
+~~~powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-portable-exe.ps1 -PackageZip dist/Go-Antigravity-windows-x64.zip -OutputDirectory dist
+~~~
+
+`dist/Go-Antigravity-windows-x64.exe` 是原生启动程序加追加在末尾的发布 ZIP：双击后解压到同级的 `Go-Antigravity-windows-x64` 目录并启动；`--extract-only` 只解压不启动，`--target <目录>` 指定安装目录本身（默认是 EXE 旁边的 `Go-Antigravity-windows-x64`），`--force` 强制覆盖。EXE 的文件版本号取自包内 `runtime/manifest.json`，启动时会和解压目录里的版本比对，相同就跳过解压直接启动，不同则就地替换（旧目录先改名保留，成功后删除）。
+
+安装后仍是“目录型”布局：EXE 只负责把同一份目录解压到位，不是把所有运行时压成单个二进制文件。运行时版本、构建提交、交付源码的修改状态与内容指纹写入 `runtime/manifest.json`（`dirty` 只反映交付文件，不表示整个 Git 工作树是否干净）；Python、Qt、Node 及后端依赖的许可文件随包保留。包内账户、设置和日志默认写入 `%LOCALAPPDATA%\Go-Antigravity`，不会写进发布目录。
 
 ### 安装与在线更新
 
-把整个发布目录放到一个固定位置（例如 `%LOCALAPPDATA%\Programs\Go-Antigravity`），运行其中的 `Go-Antigravity.exe`；不要只复制 EXE。桌面端启动后会检查 GitHub Releases 上的最新版本，下载 ZIP、按 SHA-256 校验，再在你确认关闭之后由外部 PowerShell 助手替换安装目录并重启。
+把发布 EXE 放到一个固定位置（例如 `%LOCALAPPDATA%\Programs`）双击运行，它会在旁边解出 `Go-Antigravity-windows-x64` 目录并启动其中的 `Go-Antigravity.exe`；也可以手动解压 ZIP 后运行目录里的 `Go-Antigravity.exe`，但不要只复制源码树里的启动入口。桌面端启动后会检查 GitHub Releases 上的最新版本，下载那个单文件 EXE，按 GitHub 接口给出的 SHA-256 核对，从中取出发布 ZIP 解到安装目录旁边，再在你确认关闭之后由外部 PowerShell 助手替换安装目录并重启。
 
 - 账户数据不受影响：数据目录默认是 `%LOCALAPPDATA%\Go-Antigravity`，不在安装目录里，更新不会删除或迁移账户、设置和日志。
 - 用 `--data-dir <目录>` 指定的数据目录会被更新后的重启继承；安装目录本身不能同时作为数据目录。
@@ -114,7 +120,7 @@ git tag v1.1.0
 git push origin v1.1.0
 ~~~
 
-推送标签会触发发布工作流：校验 → 打包 → 校验交付源码与校验文件 → 冒烟测试 → 发布 Release（ZIP 与 `.sha256`）。只有打标签才会发布，普通提交不会自动发版。
+推送标签会触发发布工作流：校验 → 打包 → 校验交付源码与校验文件 → 冒烟测试 → 打成单文件 EXE → 解包复核交付源码与版本 → 发布 Release（只上传这一个 EXE）。只有打标签才会发布，普通提交不会自动发版。
 
 桌面端支持从 GitHub Releases 在线检查更新（见上文“安装与在线更新”）；旧 `runtime/current` 覆盖层仍不会替换当前源码。Google Antigravity 的官方联网依赖，以及启用手机公网远程时可选的 Cloudflare Tunnel，是独立于旧发布方的服务；仅预览界面可用 `--demo`。本源码树来自核准文件清单，使用独立 Git 历史，不继承原开发仓库的提交、标签和远程配置。源码发布步骤和 Windows 包发布步骤见 [RELEASE.md](RELEASE.md)；不要上传整个开发目录。
 

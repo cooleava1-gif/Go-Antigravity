@@ -342,7 +342,7 @@ class ReadBuildTests(BaseFixture):
     def test_required_install_files_contract(self):
         self.assertEqual(set(updater.REQUIRED_INSTALL_FILES), EXPECTED_REQUIRED_FILES)
         self.assertEqual(updater.REPOSITORY, "cooleava1-gif/Go-Antigravity")
-        self.assertEqual(updater.ASSET_NAME, "Go-Antigravity-windows-x64.zip")
+        self.assertEqual(updater.ASSET_NAME, "Go-Antigravity-windows-x64.exe")
 
     def test_module_does_not_import_qt(self):
         source = Path(updater.__file__).read_text(encoding="utf-8")

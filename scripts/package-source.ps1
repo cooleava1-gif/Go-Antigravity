@@ -237,7 +237,7 @@ function New-PackageManifest {
         update = [ordered]@{
             repository = 'cooleava1-gif/Go-Antigravity'
             channel = 'stable'
-            asset = 'Go-Antigravity-windows-x64.zip'
+            asset = 'Go-Antigravity-windows-x64.exe'
         }
     }
 }

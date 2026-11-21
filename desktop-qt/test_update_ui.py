@@ -38,7 +38,7 @@ class FakeUpdater:
     """In-process stand-in for desktop-qt/updater.py (pure stdlib, no Qt)."""
 
     REPOSITORY = "cooleava1-gif/Go-Antigravity"
-    ASSET_NAME = "Go-Antigravity-windows-x64.zip"
+    ASSET_NAME = "Go-Antigravity-windows-x64.exe"
 
     class UpdateError(Exception):
         pass
@@ -591,7 +591,7 @@ class UpdateError(Exception):
 
 fake.UpdateError = UpdateError
 fake.REPOSITORY = "cooleava1-gif/Go-Antigravity"
-fake.ASSET_NAME = "Go-Antigravity-windows-x64.zip"
+fake.ASSET_NAME = "Go-Antigravity-windows-x64.exe"
 BUILD = {"version": "1.1.0", "commit": "1a2b3c4def", "packaged": True,
          "repository": fake.REPOSITORY, "install_supported": True,
          "root": "", "launcher": "", "data_directory": "", "reason": ""}

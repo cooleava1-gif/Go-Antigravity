@@ -105,19 +105,43 @@ jobs:
           }
           if ([string]$manifest.update.repository -ne 'cooleava1-gif/Go-Antigravity') { throw 'The packaged manifest lost the update repository.' }
           if ([string]$manifest.update.channel -ne 'stable') { throw 'The packaged manifest lost the stable update channel.' }
-          if ([string]$manifest.update.asset -ne 'Go-Antigravity-windows-x64.zip') { throw 'The packaged manifest lost the update asset name.' }
+          if ([string]$manifest.update.asset -ne 'Go-Antigravity-windows-x64.exe') { throw 'The packaged manifest lost the update asset name.' }
 
       - name: Smoke test Windows package
         shell: pwsh
         run: .\scripts\package-smoke-test.ps1 -PackagePath "$env:GITHUB_WORKSPACE\dist\Go-Antigravity-windows-x64.zip"
 
+      - name: Build the single-file release EXE
+        shell: pwsh
+        run: .\scripts\build-portable-exe.ps1 -PackageZip "$env:GITHUB_WORKSPACE\dist\Go-Antigravity-windows-x64.zip" -OutputDirectory "$env:GITHUB_WORKSPACE\dist"
+
+      - name: Verify the release EXE carries the verified package
+        shell: pwsh
+        run: |
+          $expected = "${{ steps.release.outputs.version }}"
+          $exe = "$env:GITHUB_WORKSPACE\dist\Go-Antigravity-windows-x64.exe"
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'The release EXE was not built.' }
+          $numeric = [regex]::Match($expected, '^(\d+)\.(\d+)\.(\d+)').Value
+          if (-not $numeric) { throw "Cannot derive a numeric version from '$expected'." }
+          $expectedFileVersion = $numeric + '.0'
+          $fileVersion = [string](Get-Item -LiteralPath $exe).VersionInfo.FileVersion
+          if ($fileVersion -ne $expectedFileVersion) { throw "The release EXE reports FileVersion '$fileVersion', expected '$expectedFileVersion'." }
+          # --target names the install root itself: the EXE unpacks the packaged tree into it.
+          $target = Join-Path $env:RUNNER_TEMP 'exe-unpack'
+          if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force }
+          $process = Start-Process -FilePath $exe -ArgumentList @('--extract-only', '--force', '--quiet', '--target', $target) -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "The release EXE failed to unpack (exit $($process.ExitCode))." }
+          .\scripts\verify-package-source.ps1 -PackagePath $target
+          $manifest = Get-Content -LiteralPath (Join-Path $target 'runtime/manifest.json') -Raw | ConvertFrom-Json
+          if ([string]$manifest.version -ne $expected) {
+            throw "The EXE payload version '$($manifest.version)' does not match '$expected'."
+          }
+
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
         with:
           name: Go-Antigravity-windows-x64
-          path: |
-            dist/Go-Antigravity-windows-x64.zip
-            dist/Go-Antigravity-windows-x64.zip.sha256
+          path: dist/Go-Antigravity-windows-x64.exe
           if-no-files-found: error
 
   publish:
@@ -130,8 +154,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: Go-Antigravity-windows-x64
-      - name: Publish verified ZIP and checksum
+      - name: Publish the verified single-file EXE
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$env:GITHUB_REF_NAME" "Go-Antigravity-windows-x64.zip" "Go-Antigravity-windows-x64.zip.sha256" --repo "$env:GITHUB_REPOSITORY" --verify-tag --generate-notes --title "Go-Antigravity $env:GITHUB_REF_NAME"
+        run: |
+          if (-not (Test-Path -LiteralPath 'Go-Antigravity-windows-x64.exe' -PathType Leaf)) { throw 'The downloaded artifact has no release EXE.' }
+          gh release create "$env:GITHUB_REF_NAME" "Go-Antigravity-windows-x64.exe" --repo "$env:GITHUB_REPOSITORY" --verify-tag --generate-notes --title "Go-Antigravity $env:GITHUB_REF_NAME"

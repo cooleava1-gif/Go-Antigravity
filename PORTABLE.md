@@ -4,9 +4,9 @@
 
 源码分发需 Python 3.10+、Node.js 22.13+（含 npm）。运行 `Start-Go-Antigravity.cmd`，脚本按锁定清单准备 Python 和后端依赖；首次安装需要联网。从 `PATH` 使用已安装的 `node.exe`，不会选用旧式便携运行时。
 
-GitHub 发布包由 `scripts/package-windows.ps1` 生成，目录包含 `Go-Antigravity.exe`、应用源文件、生产 `node_modules`、`runtime/node/node.exe` 和 `runtime/python/`。发布包不需要用户安装 Python、Node.js 或执行 npm/pip。这个包仍然是目录型发布，不是单文件 EXE。不要把开发目录中的 `.venv-qt`、`backend/node_modules` 或用户数据直接复制到发布包。
+GitHub 发布包由 `scripts/package-windows.ps1` 生成目录与 ZIP，再由 `scripts/build-portable-exe.ps1` 追加成单个自解压 `dist/Go-Antigravity-windows-x64.exe`：目录包含 `Go-Antigravity.exe`、应用源文件、生产 `node_modules`、`runtime/node/node.exe` 和 `runtime/python/`。发布包不需要用户安装 Python、Node.js 或执行 npm/pip。EXE 只是把同一份目录解压到自身旁边再启动，安装结果仍是目录型布局，不是把所有运行时压成一个二进制。不要把开发目录中的 `.venv-qt`、`backend/node_modules` 或用户数据直接复制到发布包。
 
-`runtime/manifest.json` 记录构建提交、运行时版本和交付源码指纹，其中的 `update` 块记录更新通道与发布资产名（`cooleava1-gif/Go-Antigravity`、`stable`、`Go-Antigravity-windows-x64.zip`），便于人工核对更新来源。`git.commit` 是完整提交号；`git.dirty` 为真表示打包时已交付源码相对该提交有未提交改动，`git.dirtyFiles` 按项目相对路径列出这些文件；未交付的审查产物、测试、依赖或本机数据变化不计入，因此 `dirty` 为假不代表整个 Git 工作树干净。`source.fingerprint` 是对全部交付源码（`backend/` 与 `desktop-qt/` 的应用源、静态资源和配置，不含 `node_modules`、`runtime/` 与构建出的启动器；打包根部的 `THIRD-PARTY-NOTICES.md` 与 `backend/THIRD-PARTY-NOTICES.md` 按各自路径分别计入，源树中前者内容取自后者）计算的 SHA-256，`source.fileCount`、`source.files` 和 `source.bytes` 描述同一份清单。构建会在复制完成后重算源码指纹并与暂存目录比对，不一致即失败，因此该指纹可以说明拿到的包与所记录的构建是否同源。记录 `dirty` 只说明这个包来自未提交的工作树，不代表能按某个纯提交重现；需要可重现构建时应先提交并清理工作树再打包。
+`runtime/manifest.json` 记录构建提交、运行时版本和交付源码指纹，其中的 `update` 块记录更新通道与发布资产名（`cooleava1-gif/Go-Antigravity`、`stable`、`Go-Antigravity-windows-x64.exe`），便于人工核对更新来源。`git.commit` 是完整提交号；`git.dirty` 为真表示打包时已交付源码相对该提交有未提交改动，`git.dirtyFiles` 按项目相对路径列出这些文件；未交付的审查产物、测试、依赖或本机数据变化不计入，因此 `dirty` 为假不代表整个 Git 工作树干净。`source.fingerprint` 是对全部交付源码（`backend/` 与 `desktop-qt/` 的应用源、静态资源和配置，不含 `node_modules`、`runtime/` 与构建出的启动器；打包根部的 `THIRD-PARTY-NOTICES.md` 与 `backend/THIRD-PARTY-NOTICES.md` 按各自路径分别计入，源树中前者内容取自后者）计算的 SHA-256，`source.fileCount`、`source.files` 和 `source.bytes` 描述同一份清单。构建会在复制完成后重算源码指纹并与暂存目录比对，不一致即失败，因此该指纹可以说明拿到的包与所记录的构建是否同源。记录 `dirty` 只说明这个包来自未提交的工作树，不代表能按某个纯提交重现；需要可重现构建时应先提交并清理工作树再打包。
 
 在源码检出里复制或解包后，可运行 `scripts/verify-package-source.ps1 -PackagePath <目录或ZIP>` 重算源码指纹并与 `runtime/manifest.json` 比对，任何文件增删或内容改动都会让校验不一致；只拿到发布包时，可按 `source.files` 清单逐项核对。
 
@@ -30,7 +30,7 @@ GitHub 发布包由 `scripts/package-windows.ps1` 生成，目录包含 `Go-Anti
 
 新原子写入临时文件与 Qt 启动目录带所有者信息，只回收可确定属于本项目、已超过安全期限且所有者退出的残留。新近文件、活跃进程文件、其他项目文件及无法确定所有者的旧格式临时文件保留，避免误删。异常断电后不保证立即零残留。旧文件需在停服、确认归属并备份后人工处理。
 
-`__pycache__/`、测试输出和旧 `_attic/` 是开发产物；`.venv-qt/` 和 `backend/node_modules/` 是开发环境依赖。Git 已排除相应本机产物，上传前仍应检查 `git status` 和实际提交内容。发布包只上传 `dist/Go-Antigravity-windows-x64.zip` 与同名的 `dist/Go-Antigravity-windows-x64.zip.sha256`（一行标准 `sha256sum`，无 BOM），不要直接压缩整个开发目录。
+`__pycache__/`、测试输出和旧 `_attic/` 是开发产物；`.venv-qt/` 和 `backend/node_modules/` 是开发环境依赖。Git 已排除相应本机产物，上传前仍应检查 `git status` 和实际提交内容。发布包只上传 `dist/Go-Antigravity-windows-x64.exe`（自解压，内含同一份 ZIP，完整性由 GitHub 接口给出的 SHA-256 摘要核对），不要直接压缩整个开发目录，也不要额外上传 ZIP 或 `.zip.sha256`。
 
 当前桌面不提供账户导出按钮。后端脱敏导出不能恢复账户，完整令牌导出需要明确确认；不要将完整备份、日志或隧道凭据公开分享。
 

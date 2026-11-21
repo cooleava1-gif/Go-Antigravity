@@ -67,7 +67,15 @@ pwsh -NoProfile -File scripts/package-windows.ps1 -Clean
 Get-Content dist/Go-Antigravity-windows-x64/runtime/manifest.json
 ~~~
 
-脚本会生成 `dist/Go-Antigravity-windows-x64/` 和同名 ZIP。包内入口是 `Go-Antigravity.exe`，包内运行时目录是 `runtime/node/` 与 `runtime/python/`；账户、设置和日志默认位于 `%LOCALAPPDATA%\Go-Antigravity`。GitHub Actions 的标签发布流程见 `.github/workflows/release-windows.yml`。
+脚本会生成 `dist/Go-Antigravity-windows-x64/` 和同名 ZIP。包内入口是 `Go-Antigravity.exe`，包内运行时目录是 `runtime/node/` 与 `runtime/python/`；账户、设置和日志默认位于 `%LOCALAPPDATA%\Go-Antigravity`。
+
+发布到 GitHub 的是由下面这条命令生成的自解压 EXE，它把同一份 ZIP 追加在原生启动程序之后，用户只需下载一个文件；ZIP 和 `.zip.sha256` 保留为构建产物与本地验收材料，不上传 Release：
+
+~~~powershell
+pwsh -NoProfile -File scripts/build-portable-exe.ps1 -PackageZip dist/Go-Antigravity-windows-x64.zip -OutputDirectory dist
+~~~
+
+脚本会校验 EXE 总长度、`MZ` 头、末尾追加区与 ZIP 的 SHA-256 一致，并把 `AssemblyVersion` / `FileVersion` 写成包内版本号。GitHub Actions 的标签发布流程见 `.github/workflows/release-windows.yml`。
 
 构建后对生成的 ZIP 运行以下命令。脚本解压到临时目录，扫描敏感文件并核对 manifest，然后由包内启动脚本选择 Node 和 Python。在隔离的 `LOCALAPPDATA` 下检查后端模块、SQLite 和数据目录，最后用包内 `pythonw.exe` 打开合成数据演示，等待 Qt 发出窗口就绪信号并正常退出。
 
@@ -83,7 +91,7 @@ if ($forbidden) { $forbidden | Select-Object -ExpandProperty FullName; throw 'Se
 Get-Content (Join-Path $stage 'runtime/manifest.json')
 ~~~
 
-GitHub 标签发布先调用 `.github/workflows/verify.yml` 的可复用验证流程。Node 矩阵和桌面 smoke test 全部通过后才构建包，包 smoke test 通过后才上传工件和创建 Release。
+GitHub 标签发布先调用 `.github/workflows/verify.yml` 的可复用验证流程。Node 矩阵和桌面 smoke test 全部通过后才构建包；包 smoke test 通过后打成单文件 EXE，CI 再把 EXE 解到临时目录重算源码指纹并核对版本，最后只上传这个 EXE 并创建 Release。
 
 ## 无需 TUN 的已验证范围
 

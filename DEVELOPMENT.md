@@ -63,9 +63,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows.ps1 
 ```text
 dist/Go-Antigravity-windows-x64/
 dist/Go-Antigravity-windows-x64.zip
+dist/Go-Antigravity-windows-x64.exe   # scripts/build-portable-exe.ps1 生成的单文件发布物
 ```
 
-发布包已经包含 Node、Python、PyQt 和生产依赖。GitHub 发布时上传 ZIP，不要上传整个开发目录，也不要只上传根目录的 EXE。
+发布包已经包含 Node、Python、PyQt 和生产依赖。GitHub 发布时只上传 `dist/Go-Antigravity-windows-x64.exe`（自解压，内含同一份 ZIP），不要上传整个开发目录，也不要上传源码树根目录那个只调用启动脚本的 `Go-Antigravity.exe`。
 
 ## 哪些目录不要改
 

@@ -39,7 +39,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 REPOSITORY = "cooleava1-gif/Go-Antigravity"
-ASSET_NAME = "Go-Antigravity-windows-x64.zip"
+# The release ships one self-extracting EXE: the verified release ZIP is appended verbatim to a
+# small launcher stub. zipfile reads it as-is, so the checks below still apply to the payload.
+ASSET_NAME = "Go-Antigravity-windows-x64.exe"
 CHECKSUM_ASSET_NAME = ASSET_NAME + ".sha256"
 PACKAGE_NAME = "Go-Antigravity"
 PLATFORM = "windows-x64"
@@ -474,7 +476,7 @@ def _normalize_sha256(value: Any) -> str:
 
 
 def _asset_sha256(asset: dict, assets: list, *, timeout: float) -> str:
-    """Prefer the API digest; fall back to the published .zip.sha256 sidecar."""
+    """Prefer the API digest; fall back to a published .sha256 sidecar when one exists."""
     digest = _normalize_sha256(asset.get("digest"))
     if digest:
         return digest

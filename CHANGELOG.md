@@ -2,6 +2,13 @@
 
 历史条目按当时发布时的名称与行为保留，仅用于追溯来源；其中出现的旧名称（Goagy、EasyAG 等）、旧档位和旧启动行为均不代表当前版本——当前源码已统一为 Go-Antigravity 命名。当前行为以 [README](README.md)、[开发指引](DEVELOPMENT.md) 和 [发布说明](RELEASE.md) 为准。
 
+## 未发布：单文件自解压发布包（2026-11-21）
+
+- **发布产物改为一个 EXE**：新增 `scripts/build-portable-exe.ps1` 与 `desktop-qt/sfx.cs`，把 `dist/Go-Antigravity-windows-x64.zip` 原样追加在原生自解压启动程序之后，得到 `dist/Go-Antigravity-windows-x64.exe`；GitHub Release 只上传这个文件，不再上传 ZIP 与 `.zip.sha256`。
+- **解压行为**：EXE 用自身文件版本号与目标 `runtime/manifest.json` 的版本比对，相同就跳过解压直接启动；不同或带 `--force` 时先解到同级的 `.<名称>.incoming-*` 暂存目录，再把旧目录改名保留、新目录改名就位，成功后删除旧目录。另有 `--extract-only`、`--quiet`、`--target <目录>`。失败会写 `%TEMP%\go-antigravity-unpack.log`，非 `--quiet` 时同时弹提示。
+- **在线更新沿用同一份内容**：`desktop-qt/updater.py` 的资产名改为 `Go-Antigravity-windows-x64.exe`，仍按 GitHub 摘要校验、按 ZIP 条目解包并核对 manifest，安装与回滚流程不变；`runtime/manifest.json` 的 `update.asset` 同步改名。
+- **测试**：新增 `scripts/portable-exe-tests.ps1`（构建、解包、同版本复用、旧版本就地替换、截断包必须失败），并接入 `verify.yml` 的 Windows PowerShell 5.1 与 PowerShell 7 两处门禁；`test_updater.py` 62 项、`test_update_ui.py` 29 项、`package-source-tests.ps1` 18 项、`update-install-tests.ps1` 10 项全过。
+
 ## 未发布：发布前命名与署名清理（2026-11-19）
 
 - **统一命名**：环境变量 `GOAGY_*` 改为 `GO_ANTIGRAVITY_*`（手机运行时为 `GO_ANTIGRAVITY_MOBILE_*`）；页面全局 `__goagy*` 改为 `__goAntigravity*`；请求头 `X-Go-Antigravity-Token`、`x-go-antigravity-mobile`；会话 Cookie `go_antigravity_mobile_session`；日志 `go-antigravity.log`；上下文监控节点 `go-antigravity-context-monitor`；临时文件前缀 `.go-antigravity-`；手机路由前缀 `/mobile/`（原 `/goagy-pocket/`）；PowerShell 函数名统一为 `*-Antigravity*`。

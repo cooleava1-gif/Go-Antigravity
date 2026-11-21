@@ -179,7 +179,7 @@ try {
         Assert-True ($null -ne $parsed.update) 'Manifest lost the update metadata block'
         Assert-Equal 'cooleava1-gif/Go-Antigravity' $parsed.update.repository 'Manifest update repository is wrong'
         Assert-Equal 'stable' $parsed.update.channel 'Manifest update channel is wrong'
-        Assert-Equal 'Go-Antigravity-windows-x64.zip' $parsed.update.asset 'Manifest update asset is wrong'
+        Assert-Equal 'Go-Antigravity-windows-x64.exe' $parsed.update.asset 'Manifest update asset is wrong'
     }
 
     Test-Case 'the desktop updater scripts are delivered source' {
