@@ -1,4 +1,4 @@
-# Standalone installer helper for the Go-Antigravity desktop update.
+﻿# Standalone installer helper for the Go-Antigravity desktop update.
 #
 # This file is never downloaded. updater.py copies *this* file out of the current installation into
 # a temporary folder outside the install root, then starts it with a job file. The helper waits for

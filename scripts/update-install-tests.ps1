@@ -1,4 +1,4 @@
-# Installer helper regressions for the Go-Antigravity desktop update.
+﻿# Installer helper regressions for the Go-Antigravity desktop update.
 # Real directory swaps run inside a temporary fixture: no real install, no real release asset and
 # no launcher process is ever started (fixture mode passes -NoRestart).
 $ErrorActionPreference = 'Stop'
