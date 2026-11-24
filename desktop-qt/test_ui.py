@@ -176,6 +176,13 @@ class FrontendRegressionTests(unittest.TestCase):
         self.assertEqual(self.window.usage_dist_total.text(), "—")
         self.assertEqual(self.legend(), [])
 
+    def test_usage_tiles_show_cache_reads_only_when_present(self):
+        self.window.render_usage({"today": {"totalTokens": 48061042, "requests": 250, "inputTokens": 2394458,
+                                            "outputTokens": 587675, "cacheReadTokens": 45078909}})
+        self.assertIn("缓存 45.1M", self.window.usage_tiles["today"][2].text())
+        self.window.render_usage({"today": {"totalTokens": 1000, "requests": 1, "inputTokens": 900, "outputTokens": 100}})
+        self.assertIn("缓存 0", self.window.usage_tiles["today"][2].text())
+
     def test_distribution_total_segments_and_legend_share_all_models(self):
         self.window.settle_animations()
         self.app.processEvents()

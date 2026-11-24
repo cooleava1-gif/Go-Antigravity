@@ -54,7 +54,8 @@ async function createApplication({ rootDir, dataDir, readyFile, native = false, 
     onNotice: (message, level) => events.log('SYSTEM', message, level === 'warn' ? 'tag-warn' : 'tag-proxy')
   });
   const agquota = agQuota || (typeof agcred.http === 'function' ? createAgQuota({ http: agcred.http }) : null);
-  const agusage = agUsage || createAgUsage(testMode ? { conversationsDir: path.join(dataDir, 'conversations') } : {});
+  const agusage = agUsage || createAgUsage(Object.assign({ dataDir },
+    testMode ? { conversationsDir: path.join(dataDir, 'conversations') } : {}));
   const desktop = createDesktopAdapter(testMode);
   let dictionary = loadDictionary(rootDir);
   const host = createHost({ testMode, events });

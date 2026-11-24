@@ -1274,9 +1274,14 @@ class MainWindow(QMainWindow):
             val_lbl.setText(short_number(bucket.get("totalTokens")))
             req_lbl.setText(f"{bucket.get('requests', 0)} 次")
             if "inputTokens" in bucket or "outputTokens" in bucket:
-                io_lbl.setText(f"入 {short_number(bucket.get('inputTokens'))} · 出 {short_number(bucket.get('outputTokens'))}")
+                text = f"入 {short_number(bucket.get('inputTokens'))} · 出 {short_number(bucket.get('outputTokens'))}"
+                # Always two lines: the side panel must never scroll sideways, and a
+                # steady tile height keeps the four cards aligned across renders.
+                text += f"\n缓存 {short_number(bucket.get('cacheReadTokens') or 0)}"
+                io_lbl.setText(text)
             else:
-                io_lbl.setText("Token 总计")
+                # Same two-line box as the normal branch so the cards never jump.
+                io_lbl.setText("Token 总计\n\u00a0")
 
         # Keep the period, chart, legend, and total on the same seven-day dataset.
         models = (usage.get("days7") or {}).get("models") or []
@@ -1980,7 +1985,11 @@ class MainWindow(QMainWindow):
         lines = []
         for key, title in [("today", "今日"), ("days7", "近 7 天"), ("days30", "近 30 天"), ("all", "累计")]:
             b = usage.get(key) or {}
-            lines.append(f"{title}  {short_number(b.get('totalTokens'))} Token / {b.get('requests', 0)} 次请求")
+            line = f"{title}  {short_number(b.get('totalTokens'))} Token / {b.get('requests', 0)} 次请求"
+            cache = b.get("cacheReadTokens") or 0
+            if cache:
+                line += f"（输入 {short_number(b.get('inputTokens'))} · 缓存 {short_number(cache)} · 输出 {short_number(b.get('outputTokens'))}）"
+            lines.append(line)
         lines.append(f"会话数  {usage.get('conversationCount', 0)}")
         models = (usage.get("days7") or {}).get("models") or (usage.get("days30") or {}).get("models") or []
         if models:
