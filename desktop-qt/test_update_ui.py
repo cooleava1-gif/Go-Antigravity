@@ -482,7 +482,7 @@ class UpdateUiTests(unittest.TestCase):
             demo.settle_animations()
             self.app.processEvents()
             strip = demo.update_strip
-            self.assertIn("v1.1.0", strip.identity_label.text())
+            self.assertIn(f"v{update_ui.DEMO_VERSION}", strip.identity_label.text())
             self.assertIn("界面预览", strip.identity_label.text())
             self.assertEqual(strip.identity_label.text().count("界面预览"), 1)
             with patch.object(QDialog, "exec", side_effect=AssertionError("demo opened a dialog")):

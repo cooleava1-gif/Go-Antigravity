@@ -2,8 +2,9 @@
 
 历史条目按当时发布时的名称与行为保留，仅用于追溯来源；其中出现的旧名称（Goagy、EasyAG 等）、旧档位和旧启动行为均不代表当前版本——当前源码已统一为 Go-Antigravity 命名。当前行为以 [README](README.md)、[开发指引](DEVELOPMENT.md) 和 [发布说明](RELEASE.md) 为准。
 
-## 未发布：本机用量统计改读会话轨迹（2026-11-24）
+## 1.1.1：用量统计改读会话轨迹（2026-11-24）
 
+- **手机远程跟上 Antigravity 2.34**：2.34 不再给 language server 传 `--csrf_token`，手机端因此连不上会话。现在先挑出带 `--remote-debugging-port` 的 `Antigravity.exe`，经 DevTools 从渲染进程的 `__APP_CONFIG__` 取 token；老启动器仍按命令行解析，取不到也只是回退，不会让进程发现整体失败。
 - **数据源换成本机轨迹**：改为读 `~/.gemini/antigravity/brain/<会话>/.system_generated/logs/transcript.jsonl`（每个模型响应一行，带真实模型名与 `cache_read_tokens`），只有缺轨迹的会话才回落到 `conversations/*.db` 的 `steps.metadata`，同一会话不会重复计数。
 - **总量算上缓存**：Token 总计改为「输入 + 缓存读取 + 输出」，与 Claude Code / CC Switch 的口径一致。本机当日 250 次请求实为 48,061,042 Token，旧口径只算 2,996,554——差额几乎全是之前完全没统计的 45,078,909 缓存读取。
 - **模型归类**：按轨迹里的模型 slug 归类（Gemini 4 Hydrogen / Neon / Argon、Claude Sonnet、GPT-OSS 120B 等），不再出现「其他模型」占九成的情况；旧枚举映射补上 1528 / 1530 / 1535。
@@ -11,6 +12,7 @@
 - **会话数**：改为按会话（cascade）去重，不再把每个 `.db` 文件当成一次会话。
 - **界面**：用量卡片与「明细」对话框在存在缓存读取时补上「缓存」一项。
 - **测试**：新增 `backend/test/agusage.test.cjs` 7 项（轨迹优先、去重、回落、账本跨删除保留、账本失败退化、模型命名）；后端 786 项、桌面 203 项全过。
+- **已发布**：`v1.1.1` 的 Release 依旧只挂 `Go-Antigravity-windows-x64.exe`。
 
 ## 1.1.0：单文件自解压发布包（2026-11-21）
 
