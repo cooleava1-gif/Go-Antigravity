@@ -29,6 +29,54 @@ export function mapSteps(steps,offset=0){return steps.flatMap((s,i)=>{
  return [{id:String(offset+i),role,text:text||toolName||'执行步骤',status:state(s.status),...(toolName?{toolName,detail:JSON.stringify(value??{},null,2).slice(0,48000)}:{})}];
 });}
 function parseWorkspace(value){try{return JSON.parse(value||'[]').map(s=>decodeURI(s)).join(', ');}catch{return value||'';}}
+// Antigravity 2.34 no longer passes --csrf_token to the language server: the token now only
+// lives in the desktop renderer's bootstrap config. Read it through the DevTools endpoint the
+// launcher already exposes, and never let a DevTools miss turn into a discovery failure.
+function rendererTokenFromTarget(url, timeout) {
+ return new Promise(resolve => {
+  if (typeof globalThis.WebSocket !== 'function') { resolve(null); return; }
+  let socket, done = false;
+  const finish = value => {
+   if (done) return;
+   done = true; clearTimeout(timer);
+   try { socket?.close(); } catch {}
+   resolve(value);
+  };
+  const timer = setTimeout(() => finish(null), timeout);
+  try { socket = new globalThis.WebSocket(url); } catch { finish(null); return; }
+  socket.onopen = () => {
+   try {
+    socket.send(JSON.stringify({ id: 1, method: 'Runtime.evaluate',
+     params: { expression: 'globalThis.__APP_CONFIG__ && globalThis.__APP_CONFIG__.csrfToken', returnByValue: true } }));
+   } catch { finish(null); }
+  };
+  socket.onmessage = event => {
+   let message;
+   try { message = JSON.parse(String(event.data)); } catch { finish(null); return; }
+   const token = message?.result?.result?.value;
+   finish(typeof token === 'string' && token.length >= 8 && token.length <= 256 ? token : null);
+  };
+  socket.onerror = () => finish(null);
+  socket.onclose = () => finish(null);
+ });
+}
+async function rendererToken(port, timeout = 4000) {
+ if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+ try {
+  const response = await fetch('http://127.0.0.1:' + port + '/json/list', { signal: AbortSignal.timeout(timeout) });
+  if (!response.ok) return null;
+  const targets = await response.json();
+  if (!Array.isArray(targets)) return null;
+  const pages = targets.filter(target => target && target.type === 'page' && typeof target.webSocketDebuggerUrl === 'string');
+  // The workbench page is the one holding the bootstrap config; try it before other pages.
+  pages.sort((a, b) => Number(String(b.url || '').includes('/c/')) - Number(String(a.url || '').includes('/c/')));
+  for (const page of pages) {
+   const token = await rendererTokenFromTarget(page.webSocketDebuggerUrl, timeout);
+   if (token) return token;
+  }
+ } catch {}
+ return null;
+}
 export class DesktopAdapter {
  constructor({ home, platform = process.platform, execute = exec, fetch: fetcher = fetch } = {}) {
   this.home = home || join(homedir(), '.gemini', 'antigravity');
@@ -51,11 +99,15 @@ export class DesktopAdapter {
     { windowsHide: true, timeout: 15000, maxBuffer: 1024 * 1024 });
    const rows = JSON.parse(stdout.trim() || '[]');
    const matches = [];
+   let fallbackToken;
    for (const row of rows) {
     if (!Number.isSafeInteger(row.pid) || row.pid <= 0 || !/[/\\]antigravity[/\\]/i.test(row.exe || '') ||
         typeof row.cmd !== 'string' || /antigravity-cli/i.test(row.cmd)) continue;
     const match = row.cmd.match(/(?:^|\s)--?csrf_token(?:=|\s+)(?:"([^"]+)"|([^\s"]+))/);
-    const token = match?.[1] || match?.[2];
+    let token = match?.[1] || match?.[2];
+    // Older launchers hand the token on the command line; newer ones only expose it to the renderer.
+    if (!token && fallbackToken === undefined) fallbackToken = await rendererToken(row.debugPort);
+    if (!token) token = fallbackToken;
     if (!token) continue;
     for (const port of new Set(row.ports)) { try {
      if (!Number.isInteger(port) || port < 1 || port > 65535) continue;
