@@ -19,6 +19,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import urllib.error
 from unittest.mock import patch
 import zipfile
 
@@ -190,9 +191,9 @@ class FakeDownload:
         self.calls: list[dict] = []
 
     def __call__(self, url, destination, *, expected_size=0, progress=None, cancel=None,
-                 timeout=None):
+                 timeout=None, proxy=None):
         self.calls.append({"url": url, "expected_size": expected_size,
-                           "destination": str(destination)})
+                           "destination": str(destination), "proxy": proxy})
         if self.cancel_at_start:
             raise updater.UpdateError("更新已取消。")
         destination = Path(destination)
@@ -353,9 +354,10 @@ class CheckForUpdateTests(BaseFixture):
     def check(self, payload, *, version="1.0.0", sidecar_text=None):
         root = make_source_checkout(self.base, version)
         with clean_environment(), \
-                patch.object(updater, "_fetch_json", lambda url, timeout=None: payload) as fetch, \
+                patch.object(updater, "_fetch_json",
+                             lambda url, timeout=None, proxy=None: payload) as fetch, \
                 patch.object(updater, "_fetch_text",
-                             lambda url, timeout=None: sidecar_text or "") as text:
+                             lambda url, timeout=None, proxy=None: sidecar_text or "") as text:
             result = updater.check_for_update(root)
         self.fetch = fetch
         self.text = text
@@ -444,7 +446,7 @@ class CheckForUpdateTests(BaseFixture):
     def test_network_error_is_reported_in_chinese(self):
         root = make_source_checkout(self.base)
 
-        def explode(url, timeout=None):
+        def explode(url, timeout=None, proxy=None):
             raise updater.UpdateError("无法连接 GitHub 检查更新，请检查网络或代理设置。")
 
         with clean_environment(), patch.object(updater, "_fetch_json", explode):
@@ -491,6 +493,96 @@ class DownloadTests(BaseFixture):
     def test_asset_cdn_redirect_target_is_allowed(self):
         url = "https://objects.githubusercontent.com/github-production-release-asset/1?a=b"
         self.assertEqual(updater._check_download_host(url, updater.DOWNLOAD_HOSTS), url)
+
+    def test_download_falls_back_to_the_configured_proxy(self):
+        """A direct timeout must not end the update when the settings name a working proxy."""
+        destination = self.base / "asset.zip"
+        response = FakeResponse([b"abcdef"], headers={"Content-Length": "6"})
+        proxied = FakeOpener(response)
+        seen = []
+
+        class RefusingOpener:
+            def open(self, request, timeout=None):
+                raise urllib.error.URLError("timed out")
+
+        def opener(hosts, proxy=None):
+            seen.append(proxy)
+            return RefusingOpener() if proxy is None else proxied
+
+        proxy = {"http": "http://127.0.0.1:7890", "https": "http://127.0.0.1:7890"}
+        with clean_environment(), patch.object(updater, "_PROXY_PREFERRED", False), \
+                patch.object(updater, "_opener", opener):
+            result = updater._download(ASSET_URL, destination, proxy=proxy)
+        self.assertEqual(result["sha256"], hashlib.sha256(b"abcdef").hexdigest())
+        self.assertEqual(destination.read_bytes(), b"abcdef")
+        self.assertEqual(seen, [None, proxy])
+        self.assertEqual(proxied.requests, [ASSET_URL])
+
+    def test_proxy_that_worked_is_tried_first_next_time(self):
+        destination = self.base / "asset.zip"
+        response = FakeResponse([b"abcdef"], headers={"Content-Length": "6"})
+        direct, proxied = FakeOpener(response), FakeOpener(response)
+        seen = []
+
+        def opener(hosts, proxy=None):
+            seen.append(proxy)
+            return direct if proxy is None else proxied
+
+        proxy = {"http": "http://127.0.0.1:7890", "https": "http://127.0.0.1:7890"}
+        with clean_environment(), patch.object(updater, "_PROXY_PREFERRED", True), \
+                patch.object(updater, "_opener", opener):
+            updater._download(ASSET_URL, destination, proxy=proxy)
+        self.assertEqual(seen, [proxy])
+        self.assertEqual(direct.requests, [])
+
+    def test_http_error_is_not_retried_through_the_proxy(self):
+        destination = self.base / "asset.zip"
+        seen = []
+
+        class FailingOpener:
+            def open(self, request, timeout=None):
+                raise urllib.error.HTTPError(ASSET_URL, 404, "Not Found", {}, None)
+
+        def opener(hosts, proxy=None):
+            seen.append(proxy)
+            return FailingOpener()
+
+        proxy = {"http": "http://127.0.0.1:7890", "https": "http://127.0.0.1:7890"}
+        with clean_environment(), patch.object(updater, "_PROXY_PREFERRED", False), \
+                patch.object(updater, "_opener", opener):
+            with self.assertRaises(updater.UpdateError):
+                updater._download(ASSET_URL, destination, proxy=proxy)
+        self.assertEqual(seen, [None])
+        self.assertFalse(destination.exists())
+
+    def test_proxy_settings_are_read_from_the_data_directory(self):
+        root = make_source_checkout(self.base)
+        data = root / ".go-antigravity-data"
+        with clean_environment():
+            self.assertIsNone(updater._proxy_for(root))
+            write_file(data / "settings.json", json.dumps({"port": 7890}))
+            self.assertEqual(updater._proxy_for(root),
+                             {"http": "http://127.0.0.1:7890",
+                              "https": "http://127.0.0.1:7890"})
+            for broken in ({"port": "nope"}, {"port": 0}, {}):
+                write_file(data / "settings.json", json.dumps(broken))
+                self.assertIsNone(updater._proxy_for(root))
+
+    def test_check_for_update_hands_the_proxy_to_the_fetch(self):
+        root = make_source_checkout(self.base)
+        seen = {}
+
+        def fake_fetch(url, timeout=None, proxy=None):
+            seen["proxy"] = proxy
+            return {"draft": False, "tag_name": "v1.0.0",
+                    "html_url": RELEASE_PAGE, "assets": []}
+
+        proxy = {"http": "http://127.0.0.1:7890", "https": "http://127.0.0.1:7890"}
+        with clean_environment(), patch.object(updater, "_proxy_for", lambda root: proxy), \
+                patch.object(updater, "_fetch_json", fake_fetch):
+            result = updater.check_for_update(root)
+        self.assertEqual(seen["proxy"], proxy)
+        self.assertFalse(result["available"])
 
 
 class PrepareTests(BaseFixture):

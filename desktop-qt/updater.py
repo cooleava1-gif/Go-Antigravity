@@ -373,17 +373,77 @@ class _GuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def _opener(hosts: frozenset[str]) -> urllib.request.OpenerDirector:
+_PROXY_PREFERRED = False
+
+
+def _opener(hosts: frozenset[str],
+            proxy: dict[str, str] | None = None) -> urllib.request.OpenerDirector:
     # ProxyHandler() with no arguments takes the system/environment proxy settings, so corporate
-    # and local proxies keep working without this module ever reading proxy credentials.
-    return urllib.request.build_opener(urllib.request.ProxyHandler(),
+    # and local proxies keep working without this module ever reading proxy credentials. An
+    # explicit mapping is only the local fallback the caller configured.
+    return urllib.request.build_opener(urllib.request.ProxyHandler(dict(proxy or {})),
                                        _GuardedRedirectHandler(hosts))
 
 
-def _fetch_json(url: str, *, timeout: float = API_TIMEOUT_SECONDS) -> Any:
+def _open(request: urllib.request.Request, hosts: frozenset[str], *, timeout: float,
+          proxy: dict[str, str] | None = None) -> Any:
+    """Open the request directly, then retry through the local proxy when that is the only way out.
+
+    A packaged desktop app has no HTTP(S)_PROXY in its environment, so on networks where GitHub
+    is reachable only through the user's own proxy the direct attempt just times out. The proxy
+    configured in the settings is then tried once, and whichever route worked is preferred for
+    the rest of the process.
+    """
+    global _PROXY_PREFERRED
+    attempts: list[dict[str, str] | None] = [None]
+    if proxy:
+        attempts = [proxy, None] if _PROXY_PREFERRED else [None, proxy]
+    last: BaseException | None = None
+    for mapping in attempts:
+        opener = _opener(hosts) if mapping is None else _opener(hosts, mapping)
+        try:
+            response = opener.open(request, timeout=timeout)
+        except urllib.error.HTTPError:
+            raise
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            last = error
+            continue
+        if mapping is not None:
+            _PROXY_PREFERRED = True
+        return response
+    if last is not None:
+        raise last
+    raise UpdateError("无法连接 GitHub 检查更新，请检查网络或代理设置。")
+
+
+def _proxy_for(root: Path) -> dict[str, str] | None:
+    """The local proxy from the data directory settings.json, when the user configured one."""
+    root = Path(root).resolve()
+    try:
+        data = _data_directory(root, _read_manifest(root) is not None)
+        path = data / "settings.json"
+        if path.stat().st_size > MAX_JSON_BYTES:
+            return None
+        settings = json.loads(path.read_text("utf-8", "replace"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(settings, dict):
+        return None
+    try:
+        port = int(settings.get("port"))
+    except (TypeError, ValueError):
+        return None
+    if not 1 <= port <= 65535:
+        return None
+    url = f"http://127.0.0.1:{port}"
+    return {"http": url, "https": url}
+
+
+def _fetch_json(url: str, *, timeout: float = API_TIMEOUT_SECONDS,
+                proxy: dict[str, str] | None = None) -> Any:
     request = urllib.request.Request(url, headers=API_HEADERS)
     try:
-        with _opener(API_HOSTS).open(request, timeout=timeout) as response:
+        with _open(request, API_HOSTS, timeout=timeout, proxy=proxy) as response:
             raw = response.read(MAX_JSON_BYTES)
     except urllib.error.HTTPError as error:
         raise UpdateError(f"GitHub 接口返回 HTTP {error.code}，请稍后重试。") from None
@@ -395,11 +455,12 @@ def _fetch_json(url: str, *, timeout: float = API_TIMEOUT_SECONDS) -> Any:
         raise UpdateError("GitHub 返回了无法解析的更新信息。") from None
 
 
-def _fetch_text(url: str, *, timeout: float = API_TIMEOUT_SECONDS) -> str:
+def _fetch_text(url: str, *, timeout: float = API_TIMEOUT_SECONDS,
+                proxy: dict[str, str] | None = None) -> str:
     _validate_asset_url(url)
     request = urllib.request.Request(url, headers=DOWNLOAD_HEADERS)
     try:
-        with _opener(DOWNLOAD_HOSTS).open(request, timeout=timeout) as response:
+        with _open(request, DOWNLOAD_HOSTS, timeout=timeout, proxy=proxy) as response:
             raw = response.read(MAX_CHECKSUM_BYTES)
     except urllib.error.HTTPError as error:
         raise UpdateError(f"下载校验文件失败：HTTP {error.code}。") from None
@@ -411,7 +472,8 @@ def _fetch_text(url: str, *, timeout: float = API_TIMEOUT_SECONDS) -> str:
 def _download(url: str, destination: Path, *, expected_size: int = 0,
               progress: Callable[[int, int], Any] | None = None,
               cancel: Any = None,
-              timeout: float = DOWNLOAD_TIMEOUT_SECONDS) -> dict:
+              timeout: float = DOWNLOAD_TIMEOUT_SECONDS,
+              proxy: dict[str, str] | None = None) -> dict:
     """Stream one asset into destination.part, then rename it into place."""
     _validate_asset_url(url)
     if expected_size > MAX_DOWNLOAD_BYTES:
@@ -423,7 +485,7 @@ def _download(url: str, destination: Path, *, expected_size: int = 0,
     received = 0
     total = int(expected_size)
     try:
-        with _opener(DOWNLOAD_HOSTS).open(request, timeout=timeout) as response, \
+        with _open(request, DOWNLOAD_HOSTS, timeout=timeout, proxy=proxy) as response, \
                 open(part, "wb") as handle:
             if not total:
                 header = response.headers.get("Content-Length") if response.headers else None
@@ -475,7 +537,8 @@ def _normalize_sha256(value: Any) -> str:
     return text if _SHA256_RE.match(text) else ""
 
 
-def _asset_sha256(asset: dict, assets: list, *, timeout: float) -> str:
+def _asset_sha256(asset: dict, assets: list, *, timeout: float,
+                  proxy: dict[str, str] | None = None) -> str:
     """Prefer the API digest; fall back to a published .sha256 sidecar when one exists."""
     digest = _normalize_sha256(asset.get("digest"))
     if digest:
@@ -488,14 +551,15 @@ def _asset_sha256(asset: dict, assets: list, *, timeout: float) -> str:
         sidecar_url = str(sibling.get("browser_download_url") or sibling.get("url") or "")
         if not sidecar_url:
             continue
-        text = _fetch_text(sidecar_url, timeout=timeout)
+        text = _fetch_text(sidecar_url, timeout=timeout, proxy=proxy)
         match = re.search(r"\b([0-9a-fA-F]{64})\b", text)
         if match:
             return match.group(1).lower()
     return ""
 
 
-def _select_asset(payload: dict, *, timeout: float) -> dict | None:
+def _select_asset(payload: dict, *, timeout: float,
+                  proxy: dict[str, str] | None = None) -> dict | None:
     assets = payload.get("assets")
     if not isinstance(assets, list):
         return None
@@ -512,7 +576,7 @@ def _select_asset(payload: dict, *, timeout: float) -> dict | None:
             raise UpdateError("GitHub 没有提供更新包大小，已拒绝安装。") from None
         if size_value <= 0 or size_value > MAX_DOWNLOAD_BYTES:
             raise UpdateError("GitHub 提供的更新包大小异常，已拒绝安装。")
-        sha256 = _asset_sha256(asset, assets, timeout=timeout)
+        sha256 = _asset_sha256(asset, assets, timeout=timeout, proxy=proxy)
         if not sha256:
             raise UpdateError("更新包缺少 SHA-256 校验值，已拒绝安装。")
         return {"name": ASSET_NAME, "url": url, "size": size_value, "sha256": sha256}
@@ -550,7 +614,8 @@ def check_for_update(root: Path, *, timeout: float = API_TIMEOUT_SECONDS) -> dic
     """
     root = Path(root).resolve()
     current = read_build(root)
-    payload = _fetch_json(API_LATEST_URL, timeout=timeout)
+    proxy = _proxy_for(root)
+    payload = _fetch_json(API_LATEST_URL, timeout=timeout, proxy=proxy)
     release = _parse_release(payload)
     result = {
         "current": current,
@@ -570,7 +635,7 @@ def check_for_update(root: Path, *, timeout: float = API_TIMEOUT_SECONDS) -> dic
     if not is_newer(release["version"], current["version"]):
         result["reason"] = "up-to-date"
         return result
-    asset = _select_asset(payload, timeout=timeout)
+    asset = _select_asset(payload, timeout=timeout, proxy=proxy)
     if not asset:
         raise UpdateError("GitHub 最新发布没有提供 Windows 安装包，暂时无法自动更新。")
     result["asset"] = asset
@@ -768,7 +833,7 @@ def prepare_update(root: Path, release: dict, *,
     archive = temp / ASSET_NAME
     try:
         downloaded = _download(url, archive, expected_size=size,
-                               progress=progress, cancel=cancel)
+                               progress=progress, cancel=cancel, proxy=_proxy_for(root))
         _check_cancel(cancel)
         if int(downloaded.get("size") or 0) != size:
             raise UpdateError("更新包大小与 GitHub 发布信息不一致，已停止更新。")

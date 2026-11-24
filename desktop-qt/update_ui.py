@@ -42,7 +42,7 @@ CANCEL_WAIT_MS = 8000
 #: 安装帮助进程 20s；取最大在途时长并留余量，保证运行中的 QThread 永不在退出时被销毁。
 EXIT_JOIN_MS = 65000
 #: demo 预览里展示的版本号（不读取真实构建信息，也不联网）
-DEMO_VERSION = "1.1.1"
+DEMO_VERSION = "1.1.2"
 
 #: 每个在生命周期内的工作线程：强引用保证运行中的 QThread 永不被父对象销毁。
 #: worker 一律没有 QObject 父对象，清理只走 finished 与进程退出时的 atexit。

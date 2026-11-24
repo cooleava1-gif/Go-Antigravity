@@ -69,11 +69,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-portable-exe.p
 
 ## 🛠️ 开发与发布
 
-版本号只有一个来源：`backend/package.json`（现在 `1.1.1`）。标签必须是 `v1.1.1` 这种写法，不然 CI 直接挂；推标签就会跑「校验 → 打包 → 冒烟 → 合成 EXE → 解包复核 → 发 Release（只传那一个 EXE）」。
+版本号只有一个来源：`backend/package.json`（现在 `1.1.2`）。标签必须是 `v1.1.2` 这种写法，不然 CI 直接挂；推标签就会跑「校验 → 打包 → 冒烟 → 合成 EXE → 解包复核 → 发 Release（只传那一个 EXE）」。
 
 ~~~powershell
-git tag v1.1.1
-git push origin v1.1.1
+git tag v1.1.2
+git push origin v1.1.2
 ~~~
 
 界面和验证命令见 [FRONTEND.md](FRONTEND.md)，服务、数据与清理边界见 [PORTABLE.md](PORTABLE.md)，发布细节见 [RELEASE.md](RELEASE.md)。后端自测：`cd backend && npm ci && npm run verify`。
